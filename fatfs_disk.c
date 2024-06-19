@@ -1,0 +1,69 @@
+#include "ff.h"
+#include "diskio.h"
+#include "fatfs_disk.h"
+
+// #include <stdio.h>
+
+// #include "pico/stdlib.h"
+#include "hardware/flash.h"
+
+bool flashfs_is_mounted = false;
+
+bool mount_fatfs_disk() {
+	int err = flash_fs_mount();
+	if (err)
+		return false;
+	flashfs_is_mounted = true;
+	return true;
+}
+
+bool fatfs_is_mounted() {
+	return flashfs_is_mounted;
+}
+
+void create_fatfs_disk() {
+	flash_fs_create();
+	flashfs_is_mounted = true;
+
+	FATFS fs;
+	FIL fil;
+	FRESULT res;
+	BYTE work[FF_MAX_SS];
+
+	res = f_mkfs("", 0, work, sizeof(work));
+	f_mount(&fs, "", 0);
+	f_setlabel("A8-Pico-SIO");
+	res = f_open(&fil, "INFO.TXT", FA_CREATE_NEW | FA_WRITE);
+	f_puts("Atari 8-bit Pico SIO device\r\n(c) 2024 woj, based heavily on A8PicoCart by Electrotrains (c) 2023\r\nDrag your ATR, ATX, XEX, CAS, or WAV files in here!\r\n", &fil);
+	f_close(&fil);
+	f_mount(0, "", 0);
+}
+
+uint32_t fatfs_disk_read(uint8_t* buff, uint32_t sector, uint32_t count) {
+	if (!flashfs_is_mounted)
+		return RES_ERROR;
+	if (sector < 0 || sector >= SECTOR_NUM)
+		return RES_PARERR;
+
+	for (int i=0; i<count; i++)
+		flash_fs_read_FAT_sector(sector + i, buff + (i*SECTOR_SIZE));
+	return RES_OK;
+}
+
+uint32_t fatfs_disk_write(const uint8_t* buff, uint32_t sector, uint32_t count) {
+	if (!flashfs_is_mounted)
+		return RES_ERROR;
+	if (sector < 0 || sector >= SECTOR_NUM)
+		return RES_PARERR;
+
+	for (int i=0; i<count; i++) {
+		flash_fs_write_FAT_sector(sector + i, buff + (i*SECTOR_SIZE));
+		if (!flash_fs_verify_FAT_sector(sector + i, buff + (i*SECTOR_SIZE)))
+			return RES_ERROR;
+	}
+	return RES_OK;
+}
+
+void fatfs_disk_sync() {
+	flash_fs_sync();
+}
