@@ -1,9 +1,15 @@
+// Useful links:
+// https://forums.raspberrypi.com/viewtopic.php?t=349257
+// https://github.com/TheMontezuma/SIO2BSD
+
+
 #include <string.h>
 #include <cstdlib>
 
 #include "pico/time.h"
 #include "tusb.h"
 #include "fatfs_disk.h"
+#include "ff.h"
 
 #include "libraries/pico_display_2/pico_display_2.hpp"
 #include "drivers/st7789/st7789.hpp"
@@ -105,6 +111,119 @@ struct ProgressBar {
 	}
 };
 
+TCHAR curr_path[256] = {0};
+size_t num_files;
+
+const size_t file_names_buffer_len = (256+13)*256;
+TCHAR file_names[file_names_buffer_len]; // Guarantee to hold 256 full length long (255+1) and short (12+1) file names
+
+typedef struct  {
+	size_t short_name_index; // Always present, use for file operations, MSB bit set = directory
+	size_t long_name_index; // Potentially present (if different from short), use for displaying
+} file_entry_type;
+
+const size_t file_entries_len = 2048;
+file_entry_type file_entries[file_entries_len];
+
+int file_entry_cmp(const void* p1, const void* p2) {
+	file_entry_type* e1 = (file_entry_type*)p1; file_entry_type* e2 = (file_entry_type*)p2;
+	size_t e1d = e1->short_name_index & 0x80000000; size_t e2d = e2->short_name_index & 0x80000000;
+	if (e1d && !e2d) return -1;
+	else if (!e1d && e2d) return 1;
+	else return strcasecmp(&file_names[e1->long_name_index], &file_names[e2->long_name_index]);
+}
+
+size_t get_filename_ext(TCHAR *filename) {
+	size_t l = strlen(filename);
+	size_t i=0;
+	while(i < l) {
+		if(filename[i] == '.') {
+			i++;
+			break;
+		}
+		i++;
+	}
+	return i;
+}
+
+bool is_valid_cas_file(TCHAR *filename) {
+	size_t i = get_filename_ext(filename);
+	return strcasecmp(&filename[i], "CAS") == 0 || strcasecmp(&filename[i], "WAV") == 0;
+}
+
+size_t mark_directory(size_t is_directory_mask, size_t current_file_name_index) {
+	if(is_directory_mask) {
+		file_names[current_file_name_index-1] = '/';
+		file_names[current_file_name_index] = 0;
+		current_file_name_index++;
+	}
+	return current_file_name_index;
+}
+
+uint8_t read_directory() {
+	FATFS FatFs; FILINFO fno; DIR dir;
+	size_t current_file_name_index = 0;
+	uint8_t ret = 1;
+
+	num_files = 0;
+	if (f_mount(&FatFs, "", 1) == FR_OK) {
+		if (f_opendir(&dir, curr_path) == FR_OK) {
+			while (true) {
+				if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
+				if (fno.fattrib & (AM_HID | AM_SYS)) continue;
+				size_t is_directory_mask = fno.fattrib & AM_DIR ? 0x80000000 : 0;
+				if (!is_directory_mask && !is_valid_cas_file(fno.fname)) continue;
+				if (fno.altname[0]) {
+					size_t ls = strlen(fno.altname)+1;
+					size_t ll = strlen(fno.fname)+1;
+					if(current_file_name_index + ls + ll + (is_directory_mask ? 2 : 0) > file_names_buffer_len) {
+						// TODO mark files left
+						ret = 2;
+						break;
+					}
+					strcpy(&file_names[current_file_name_index], fno.altname);
+					file_entries[num_files].short_name_index = current_file_name_index | is_directory_mask;
+					current_file_name_index += ls;
+					current_file_name_index = mark_directory(is_directory_mask, current_file_name_index);
+					strcpy(&file_names[current_file_name_index], fno.fname);
+					file_entries[num_files].long_name_index = current_file_name_index;
+					current_file_name_index += ll;
+					current_file_name_index = mark_directory(is_directory_mask, current_file_name_index);
+				}else{
+					size_t ls = strlen(fno.fname)+1;
+					if(current_file_name_index + ls + (is_directory_mask ? 1 : 0) > file_names_buffer_len) {
+						// TODO mark files left
+						ret = 2;
+						break;
+					}
+					strcpy(&file_names[current_file_name_index], fno.fname);
+					file_entries[num_files].long_name_index = current_file_name_index;
+					file_entries[num_files].short_name_index = current_file_name_index | is_directory_mask;
+					current_file_name_index += ls;
+					current_file_name_index = mark_directory(is_directory_mask, current_file_name_index);
+				}
+				num_files++;
+				if(num_files >= file_entries_len) {
+					// TODO mark files left
+					ret = 2;
+					break;
+				}
+			}
+			f_closedir(&dir);
+		} else {
+			// TODO mark no files
+			ret = 0;
+		}
+		f_mount(0, "", 1);
+		qsort((file_entry_type *)file_entries, num_files, sizeof(file_entry_type), file_entry_cmp);
+	} else {
+		// Mark no files
+		ret = 0;
+	}
+	return ret;
+}
+
+
 int main() {
 //	stdio_init_all();
 	led.set_rgb(0, 0, 0);
@@ -131,10 +250,26 @@ int main() {
 		st7789.update(&graphics);
 		if(button_a.read())
 			usb_drive();
+		sleep_ms(20);
 	}while(boot_time <= usb_boot_delay);
 
 	graphics.set_pen(BG); graphics.clear();
 	st7789.update(&graphics);
+
+	tud_mount_cb();
+
+	curr_path[0] = 0;
+	read_directory(); // TODO display some animation
+	text_location.x = 0;
+	text_location.y = 0;
+	graphics.set_pen(WHITE);
+	for(int i=0;i<num_files;i++) {
+		if(i>10)
+			break;
+		print_text(&file_names[file_entries[i].long_name_index]);
+		text_location.y += 8*font_scale;
+		st7789.update(&graphics);
+	}
 
 	while(true) {
 		tight_loop_contents();
