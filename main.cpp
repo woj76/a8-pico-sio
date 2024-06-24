@@ -2,6 +2,38 @@
 // https://forums.raspberrypi.com/viewtopic.php?t=349257
 // https://github.com/TheMontezuma/SIO2BSD
 
+// Screens 20x15 for 2-scale font
+
+// main
+// **********************
+// *                    *
+// *>    Config...     ^*
+// *                    *
+// *  D1:   <EMPTY>     *
+// *  D2:   <EMPTY>     *
+// *  D3:x12345678.910  *
+// *  D4:x12345678.910  *
+// *                    *
+// *     Rotate Up      *
+// *     Rotate Down    *
+// *                    *
+// *   C:x12345679.910  *
+// *   |||||||||||||||  *
+// *   |||||||||||||||  *
+// *E     Rewind       V*
+// *                    *
+// **********************
+
+// Symbols needed: -> eject ^ V <-
+
+// Config:
+// Turbo system:
+//   KSO 2000 J2
+//   KSO 2000 SIO
+//   ???
+// HSIO divisor: 0-9
+
+//
 
 #include <string.h>
 #include <cstdlib>
@@ -19,11 +51,16 @@
 
 #include "font_atari_data.hpp"
 
-const uint32_t usb_boot_delay = 2000;
+const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
 const std::string str_press_a_1 = "Press 'A' for";
 const std::string str_press_a_2 = "USB drive...";
+const std::string char_eject = " ";
+const std::string char_up = "!";
+const std::string char_down = "\"";
+const std::string char_left = "#";
+const std::string char_right = "$";
 
 using namespace pimoroni;
 
@@ -47,7 +84,12 @@ const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
 	WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC);
 
-void print_text(const std::string_view &t) {
+void print_text(const std::string_view &t, int inverse=0) {
+	graphics.set_pen(WHITE);
+	if(inverse) {
+		Rect rect(text_location.x, text_location.y, inverse*font_scale*8, font_scale*8);
+		graphics.rectangle(rect); graphics.set_pen(BG);
+	}
 	graphics.text(t, text_location, st7789.width, font_scale, 0.0, 0, true);
 }
 
@@ -64,7 +106,6 @@ void cdc_task(void) {
 bool repeating_timer_callback(struct repeating_timer *t) {
 	static uint32_t dy = 1;
 	graphics.set_pen(BG); graphics.clear();
-	graphics.set_pen(WHITE);
 	text_location.y += dy;
 	if(text_location.y == st7789.height-8*font_scale-1) dy = -1;
 	if(text_location.y == 1) dy = 1;
@@ -74,7 +115,7 @@ bool repeating_timer_callback(struct repeating_timer *t) {
 }
 
 void usb_drive() {
-	graphics.set_pen(BG); graphics.clear(); graphics.set_pen(WHITE);
+	graphics.set_pen(BG); graphics.clear();
 
 	text_location.x = str_x(str_file_transfer.length());
 	text_location.y = str_y(1);
@@ -233,10 +274,9 @@ int main() {
 	graphics.set_pen(BG); graphics.clear();
 
 	if(!button_a.read()) {
-		graphics.set_pen(WHITE);
-		print_text(str_press_a_1);
+		print_text(str_press_a_1, str_press_a_1.length());
 		text_location.y += 12*font_scale;
-		print_text(str_press_a_2);
+		print_text(str_press_a_2, str_press_a_2.length());
 		st7789.update(&graphics);
 	}else
 		usb_drive();
@@ -250,7 +290,7 @@ int main() {
 		st7789.update(&graphics);
 		if(button_a.read())
 			usb_drive();
-		sleep_ms(20);
+		sleep_ms(1000/60);
 	}while(boot_time <= usb_boot_delay);
 
 	graphics.set_pen(BG); graphics.clear();
@@ -262,7 +302,6 @@ int main() {
 	read_directory(); // TODO display some animation
 	text_location.x = 0;
 	text_location.y = 0;
-	graphics.set_pen(WHITE);
 	for(int i=0;i<num_files;i++) {
 		if(i>10)
 			break;
