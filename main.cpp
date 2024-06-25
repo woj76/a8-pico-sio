@@ -4,25 +4,6 @@
 
 // Screens 20x15 for 2-scale font
 
-// main
-// **********************
-// *                    *
-// *>    Config...     ^*
-// *                    *
-// *  D1:   <EMPTY>     *
-// *  D2:   <EMPTY>     *
-// *  D3:x12345678.910  *
-// *  D4:x12345678.910  *
-// *                    *
-// *     Rotate Up      *
-// *     Rotate Down    *
-// *                    *
-// *   C:x12345679.910  *
-// *   |||||||||||||||  *
-// *   |||||||||||||||  *
-// *E     Rewind       V*
-// *                    *
-// **********************
 
 // Symbols needed: -> eject ^ V <-
 
@@ -56,11 +37,13 @@ const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
 const std::string str_press_a_1 = "Press 'A' for";
 const std::string str_press_a_2 = "USB drive...";
-const std::string char_eject = " ";
-const std::string char_up = "!";
-const std::string char_down = "\"";
-const std::string char_left = "#";
-const std::string char_right = "$";
+std::string char_empty = " ";
+std::string char_up = "!";
+std::string char_down = "\"";
+std::string char_left = "#";
+std::string char_right = "$";
+std::string char_inject = "%";
+std::string char_eject = "&";
 
 using namespace pimoroni;
 
@@ -264,6 +247,99 @@ uint8_t read_directory() {
 	return ret;
 }
 
+int8_t cursor_prev = -1;
+int8_t cursor_position = 0;
+
+std::string str_config = "Config...";
+std::string str_d1 = "D1:   <EMPTY>   ";
+std::string str_d2 = "D2:   <EMPTY>   ";
+std::string str_d3 = "D3:   <EMPTY>   ";
+std::string str_d4 = "D4:   <EMPTY>   ";
+std::string str_rot_up = "Rotate Up";
+std::string str_rot_down = "Rotate Down";
+std::string str_cas = "C:   <EMPTY>   ";
+std::string str_rewind = "Rewind";
+
+typedef struct {
+	std::string *str;
+	int x;
+	int y;
+	size_t wd;
+} menu_entry;
+
+const menu_entry menu_entries[] = {
+	{.str = &str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=str_config.length()},
+	{.str = &str_d1,.x=2*8*font_scale,.y=(3*8-4)*font_scale,.wd=str_d1.length()},
+	{.str = &str_d2,.x=2*8*font_scale,.y=(4*8-4)*font_scale,.wd=str_d2.length()},
+	{.str = &str_d3,.x=2*8*font_scale,.y=(5*8-4)*font_scale,.wd=str_d3.length()},
+	{.str = &str_d4,.x=2*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
+	{.str = &str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
+	{.str = &str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
+	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
+	{.str = &str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
+};
+const size_t menu_entry_size = 9;
+
+typedef struct {
+	std::string *str;
+	int x;
+	int y;
+} button_entry;
+
+button_entry main_buttons[] {
+	{.str = &char_eject,.x=font_scale,.y=(11*8-1)*font_scale},
+	{.str = &char_right,.x=font_scale,.y=(3*8+1)*font_scale},
+	{.str = &char_up,.x=st7789.width-(9*font_scale),.y=(3*8+1)*font_scale},
+	{.str = &char_down,.x=st7789.width-(9*font_scale),.y=(11*8-1)*font_scale}
+};
+// const size_t main_buttons_size = 4;
+
+void update_buttons(button_entry menu_buttons[]) {
+	graphics.set_font(&symbol_font);
+	for(int i=0; i<4;i++) {
+		text_location.x = menu_buttons[i].x;
+		text_location.y = menu_buttons[i].y;
+		graphics.set_pen(BG);
+		Rect r(text_location.x,text_location.y,8*font_scale,8*font_scale);
+		graphics.rectangle(r);
+		print_text(*(menu_buttons[i].str));
+	}
+	graphics.set_font(&atari_font);
+}
+
+void update_menu_entry(int i) {
+	text_location.x = menu_entries[i].x;
+	text_location.y = menu_entries[i].y;
+	print_text(*(menu_entries[i].str), i==cursor_position ? menu_entries[i].wd : 0);
+}
+
+void update_main_menu() {
+	if(cursor_prev == -1) {
+		graphics.set_pen(BG);
+		graphics.clear();
+		for(int i=0; i<menu_entry_size;i++)
+			update_menu_entry(i);
+
+	}else{
+		int i = cursor_prev;
+		while(true) {
+			Rect r(menu_entries[i].x,menu_entries[i].y,menu_entries[i].wd*8*font_scale,8*font_scale);
+			graphics.set_pen(BG);
+			graphics.rectangle(r);
+			update_menu_entry(i);
+			if(i == cursor_position)
+				break;
+			i = cursor_position;
+		}
+
+	}
+	if((cursor_position >= 1 && cursor_position <=4) || cursor_position == 7) {
+		main_buttons[0].str = &char_eject;
+	}else{
+		main_buttons[0].str = &char_empty;
+	}
+	update_buttons(main_buttons);
+}
 
 int main() {
 //	stdio_init_all();
@@ -293,11 +369,9 @@ int main() {
 		sleep_ms(1000/60);
 	}while(boot_time <= usb_boot_delay);
 
-	graphics.set_pen(BG); graphics.clear();
-	st7789.update(&graphics);
-
 	tud_mount_cb();
 
+/*
 	curr_path[0] = 0;
 	read_directory(); // TODO display some animation
 	text_location.x = 0;
@@ -309,13 +383,50 @@ int main() {
 		text_location.y += 8*font_scale;
 		st7789.update(&graphics);
 	}
+*/
+
+	update_main_menu();
+	ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100);
+	st7789.update(&graphics);
 
 	while(true) {
-		tight_loop_contents();
+		if(button_x.read() && cursor_position > 0) {
+			cursor_prev = cursor_position;
+			cursor_position--;
+			update_main_menu();
+			st7789.update(&graphics);
+		}else if(button_y.read() && cursor_position < menu_entry_size-1) {
+			cursor_prev = cursor_position;
+			cursor_position++;
+			update_main_menu();
+			st7789.update(&graphics);
+		}
 	}
 
 	return 0;
 }
+
+
+
+// main
+// **********************
+// *                    *
+// *>     Config...    ^*
+// *                    *
+// *  D1:   <EMPTY>     *
+// *  D2:   <EMPTY>     *
+// *  D3:x12345678.910  *
+// *  D4:x12345678.910  *
+// *       .5           *
+// *     Rotate Up      *
+// *    Rotate Down     *
+// *                    *
+// *   C:x12345679.910  *
+// *   |||||||||||||||  *
+// *   |||||||||||||||  *
+// *E     Rewind       V*
+// *                    *
+// **********************
 
 
 void tud_mount_cb(void) {
