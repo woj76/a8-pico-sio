@@ -37,6 +37,8 @@ const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
 const std::string str_press_a_1 = "Press 'A' for";
 const std::string str_press_a_2 = "USB drive...";
+const std::string str_up_dir = "../";
+const std::string str_more_files = "[Max files!]";
 std::string char_empty = " ";
 std::string char_up = "!";
 std::string char_down = "\"";
@@ -170,9 +172,19 @@ size_t get_filename_ext(TCHAR *filename) {
 	return i;
 }
 
-bool is_valid_cas_file(TCHAR *filename) {
+enum file_type {disk, casette};
+file_type ft = file_type::disk;
+
+bool is_valid_file(TCHAR *filename) {
 	size_t i = get_filename_ext(filename);
-	return strcasecmp(&filename[i], "CAS") == 0 || strcasecmp(&filename[i], "WAV") == 0;
+	switch(ft) {
+		case file_type::casette:
+			return strcasecmp(&filename[i], "CAS") == 0 || strcasecmp(&filename[i], "WAV") == 0;
+		case file_type::disk:
+			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || strcasecmp(&filename[i], "XEX") == 0;
+		default:
+			return false;
+	}
 }
 
 size_t mark_directory(size_t is_directory_mask, size_t current_file_name_index) {
@@ -183,6 +195,7 @@ size_t mark_directory(size_t is_directory_mask, size_t current_file_name_index) 
 	}
 	return current_file_name_index;
 }
+
 
 uint8_t read_directory() {
 	FATFS FatFs; FILINFO fno; DIR dir;
@@ -196,7 +209,7 @@ uint8_t read_directory() {
 				if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
 				if (fno.fattrib & (AM_HID | AM_SYS)) continue;
 				size_t is_directory_mask = fno.fattrib & AM_DIR ? 0x80000000 : 0;
-				if (!is_directory_mask && !is_valid_cas_file(fno.fname)) continue;
+				if (!is_directory_mask && !is_valid_file(fno.fname)) continue;
 				if (fno.altname[0]) {
 					size_t ls = strlen(fno.altname)+1;
 					size_t ll = strlen(fno.fname)+1;
@@ -248,17 +261,17 @@ uint8_t read_directory() {
 }
 
 int8_t cursor_prev = -1;
-int8_t cursor_position = 0;
+int8_t cursor_position = 1;
 
-std::string str_config = "Config...";
+const std::string str_config = "Config...";
 std::string str_d1 = "D1:   <EMPTY>   ";
 std::string str_d2 = "D2:   <EMPTY>   ";
 std::string str_d3 = "D3:   <EMPTY>   ";
 std::string str_d4 = "D4:   <EMPTY>   ";
-std::string str_rot_up = "Rotate Up";
-std::string str_rot_down = "Rotate Down";
+const std::string str_rot_up = "Rotate Up";
+const std::string str_rot_down = "Rotate Down";
 std::string str_cas = "C:   <EMPTY>   ";
-std::string str_rewind = "Rewind";
+const std::string str_rewind = "Rewind";
 
 typedef struct {
 	std::string *str;
@@ -268,15 +281,15 @@ typedef struct {
 } menu_entry;
 
 const menu_entry menu_entries[] = {
-	{.str = &str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=str_config.length()},
+	{.str = (std::string*)&str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=str_config.length()},
 	{.str = &str_d1,.x=2*8*font_scale,.y=(3*8-4)*font_scale,.wd=str_d1.length()},
 	{.str = &str_d2,.x=2*8*font_scale,.y=(4*8-4)*font_scale,.wd=str_d2.length()},
 	{.str = &str_d3,.x=2*8*font_scale,.y=(5*8-4)*font_scale,.wd=str_d3.length()},
 	{.str = &str_d4,.x=2*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
-	{.str = &str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
-	{.str = &str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
+	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
+	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
 	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
-	{.str = &str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
+	{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
 };
 const size_t menu_entry_size = 9;
 
@@ -341,6 +354,183 @@ void update_main_menu() {
 	update_buttons(main_buttons);
 }
 
+
+
+
+// selected files = curr_path + short_file_name of the selected file
+// read them from save state?
+
+/*
+	curr_path[0] = 0;
+	read_directory(); // TODO display some animation
+	text_location.x = 0;
+	text_location.y = 0;
+	for(int i=0;i<num_files;i++) {
+		if(i>10)
+			break;
+		print_text(&file_names[file_entries[i].long_name_index]);
+		text_location.y += 8*font_scale;
+		st7789.update(&graphics);
+	}
+*/
+
+std::string str_fit = "             ";
+
+void fit_str(TCHAR *s, int sl, int l) {
+	// l is either 12 (6, 1, 5) or 8 (4, 1, 3)
+	int h = l/2;
+	int i;
+	for(i=0; i < h; i++) str_fit[i] = s[i];
+	str_fit[i++] = '~';
+	int j = sl - h + 1;
+	while(i<l) str_fit[i++] = s[j++];
+	str_fit[i] = 0;
+}
+
+std::string *ptr_str_file_name;
+
+void update_one_display_file(int i, int fi) {
+	TCHAR *f = &file_names[file_entries[fi].long_name_index];
+	// Directory xxxxxxxxxxxxxxxxxxxx/
+	// Directory xxxxxxxxxxxxxxxxxx.ext/
+	// Directory xxx/
+	// Directory xxx.ext/
+	// File name xxxxxxxxxxxxxxxxxxx
+	// File name xxxxxxxxxxxxxxxxxxxxx.ext
+	// File name xxxx
+	// File name xxx.ext
+	size_t ei = get_filename_ext(f) - 1;
+	bool ext = (f[ei] == '.') ? true : false;
+	if (file_entries[fi].short_name_index & 0x80000000) {
+		int pe = ext ? 8 : 12;
+		if(ei < pe) pe = ei;
+		std::string s2(&f[ei]);
+		text_location.x += pe*8*font_scale;
+		print_text(s2, i == cursor_position ? s2.length() : 0);
+		text_location.x -= pe*8*font_scale;
+		if(i != cursor_position && ei > pe) {
+			// TODO make new xxx~yyy string
+			// xxxx~yyy
+			fit_str(f, ei, pe);
+			ptr_str_file_name = &str_fit;
+			ei = pe;
+		}else{
+			ptr_str_file_name = new std::string(f, ei);
+		}
+		if(i == cursor_position) {
+			// TODO do scrolling thing
+			print_text(*ptr_str_file_name, ptr_str_file_name->length());
+		} else {
+			print_text(*ptr_str_file_name);
+		}
+	} else {
+		if(ext) {
+			std::string s2(&f[ei]);
+			text_location.x += 8*8*font_scale;
+			print_text(s2, i == cursor_position ? 4 : 0);
+			text_location.x -= 8*8*font_scale;
+		}else{
+			ei++;
+		}
+		if(i != cursor_position && ei > 8) {
+			fit_str(f, ei, 8);
+			ptr_str_file_name = &str_fit;
+			ei = 8;
+		}else{
+		 	ptr_str_file_name = new std::string(f, ei);
+		}
+		if(i == cursor_position) {
+			// TODO do scrolling thing
+			print_text(*ptr_str_file_name, ptr_str_file_name->length());
+		} else {
+			print_text(*ptr_str_file_name);
+		}
+	}
+}
+
+void update_display_files(int top_index) {
+	int shift_index = curr_path[0] ? 1 : 0;
+	text_location.x = (3*8+4)*font_scale;
+	if(cursor_prev == -1) {
+		Rect r(text_location.x,8*font_scale,13*8*font_scale,11*8*font_scale);
+		graphics.set_pen(BG); graphics.rectangle(r);
+		for(int i = 0; i<11; i++) {
+			text_location.y = 8*(1+i)*font_scale;
+			if(!i && !top_index && shift_index) {
+				print_text(str_up_dir, i == cursor_position ? 13 : 0);
+			} else {
+				int fi = top_index+i-shift_index;
+				if(fi >= num_files)
+					break;
+				update_one_display_file(i,fi);
+			}
+		}
+	}else{
+		int i = cursor_prev;
+		while(true) {
+			text_location.y = 8*(1+i)*font_scale;
+			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
+			graphics.set_pen(BG); graphics.rectangle(r);
+			if(!i && !top_index && shift_index)
+				print_text(str_up_dir, i == cursor_position ? 13 : 0);
+			else
+				update_one_display_file(i, top_index+i-shift_index);
+			if(i == cursor_position)
+				break;
+			i = cursor_position;
+		}
+	}
+}
+
+void get_file(file_type t, int file_entry_index) {
+	static uint8_t get_file_cursor_position = 0;
+	static int top_index = 0;
+	ft = t;
+	uint8_t saved_cursor_position = cursor_position;
+	cursor_position = get_file_cursor_position;
+	cursor_prev = -1;
+
+	main_buttons[0].str = &char_left;
+
+	// clean up screen
+	graphics.set_pen(BG); graphics.clear();
+	// display buttons
+
+	// Below do this in the loop, break only once window closed or file selected
+	// setup screen, initiate infinite progress bar (implement it)
+
+	// on action button reset get_file_cursor_position to 0
+	uint8_t r = read_directory();
+	if(!r && curr_path[0]) {
+		curr_path[0] = 0;
+		r = read_directory();
+	}
+	// Kill the progress bar
+
+	graphics.set_pen(WHITE);
+	update_buttons(main_buttons);
+
+	if(!r) {
+		// no media! only allow to close, no other buttons,
+		// leave just one button
+	}else{
+		if(r == 2) {
+			text_location.x = (20-str_more_files.length())*4*font_scale;
+			text_location.y = 13*8*font_scale;
+			print_text(str_more_files, str_more_files.length());
+		}
+		update_display_files(top_index);
+		st7789.update(&graphics);
+		// 1 all available files are in the list
+		// 2 not all files are in the list
+		// if curr_path[0] != 0 the first entry is the up dir
+		// if 2 display info at the bottom that there are undisplayed files
+		// in inverse Max file limit!
+	}
+	cursor_position = saved_cursor_position;
+	// restore buttons
+}
+
 int main() {
 //	stdio_init_all();
 	led.set_rgb(0, 0, 0);
@@ -371,24 +561,18 @@ int main() {
 
 	tud_mount_cb();
 
-/*
-	curr_path[0] = 0;
-	read_directory(); // TODO display some animation
-	text_location.x = 0;
-	text_location.y = 0;
-	for(int i=0;i<num_files;i++) {
-		if(i>10)
-			break;
-		print_text(&file_names[file_entries[i].long_name_index]);
-		text_location.y += 8*font_scale;
-		st7789.update(&graphics);
-	}
-*/
 
 	update_main_menu();
 	ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100);
 	st7789.update(&graphics);
 
+	get_file(file_type::casette, 5);
+
+	while(true)
+	  tight_loop_contents();
+
+
+/*
 	while(true) {
 		if(button_x.read() && cursor_position > 0) {
 			cursor_prev = cursor_position;
@@ -402,7 +586,7 @@ int main() {
 			st7789.update(&graphics);
 		}
 	}
-
+*/
 	return 0;
 }
 
