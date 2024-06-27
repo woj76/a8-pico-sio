@@ -2,19 +2,12 @@
 // https://forums.raspberrypi.com/viewtopic.php?t=349257
 // https://github.com/TheMontezuma/SIO2BSD
 
-// Screens 20x15 for 2-scale font
-
-
-// Symbols needed: -> eject ^ V <-
-
 // Config:
 // Turbo system:
 //   KSO 2000 J2
 //   KSO 2000 SIO
 //   ???
 // HSIO divisor: 0-9
-
-//
 
 #include <string.h>
 #include <cstdlib>
@@ -39,6 +32,8 @@ const std::string str_press_a_1 = "Press 'A' for";
 const std::string str_press_a_2 = "USB drive...";
 const std::string str_up_dir = "../";
 const std::string str_more_files = "[Max files!]";
+const std::string str_no_media = "No media!?";
+
 std::string char_empty = " ";
 std::string char_up = "!";
 std::string char_down = "\"";
@@ -55,7 +50,7 @@ PicoGraphics_PenP4 graphics(st7789.width, st7789.height, nullptr);
 uint32_t inline str_x(uint32_t l) { return (st7789.width - l*8*font_scale)/2; }
 uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
-Point text_location(str_x(std::max(str_press_a_1.length(),str_press_a_2.length())), str_y(5));
+Point text_location(str_x(std::max(str_press_a_1.length(),str_press_a_2.length())), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 0);
 
@@ -88,7 +83,7 @@ void cdc_task(void) {
 	}
 }
 
-bool repeating_timer_callback(struct repeating_timer *t) {
+bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	static uint32_t dy = 1;
 	graphics.set_pen(BG); graphics.clear();
 	text_location.y += dy;
@@ -109,7 +104,7 @@ void usb_drive() {
 
 	tud_init(BOARD_TUD_RHPORT);
 	struct repeating_timer timer;
-	add_repeating_timer_ms(200, repeating_timer_callback, NULL, &timer);
+	add_repeating_timer_ms(200, repeating_timer_file_transfer, NULL, &timer);
 	while (true) {
 		tud_task();
 		cdc_task();
@@ -117,12 +112,14 @@ void usb_drive() {
 }
 
 struct ProgressBar {
-	const uint32_t range;
+	int range;
 	Rect progress_rect;
+	const Rect clear_rect;
 	const uint32_t progress_range;
-	ProgressBar(const Point &p, const uint32_t r) :
-			range(r),
-			progress_rect(p.x+4*font_scale,p.y+4*font_scale,0,8*font_scale),
+	ProgressBar(const Point &p, int r) :
+			range(!r ? 1 : r),
+			progress_rect(p.x+4*font_scale,p.y+4*font_scale,r ? 0 : 16,8*font_scale),
+			clear_rect(p.x+4*font_scale,p.y+4*font_scale,st7789.width-2*p.x-8*font_scale,8*font_scale),
 			progress_range(st7789.width-2*p.x-8*font_scale) {
 		Rect rect(p.x, p.y, progress_range+8*font_scale, 16*font_scale);
 		graphics.set_pen(WHITE); graphics.rectangle(rect);
@@ -130,18 +127,41 @@ struct ProgressBar {
 		graphics.set_pen(BG); graphics.rectangle(rect);
 	}
 	void update(uint32_t step) {
+		if(range < 2)
+			return;
 		if (step > range) step = range;
 		progress_rect.w = step*progress_range/range;
 		graphics.set_pen(WHITE);
 		graphics.rectangle(progress_rect);
 	}
+	void update() {
+		if(range > 1)
+			return;
+		graphics.set_pen(BG); graphics.rectangle(clear_rect);
+		if(range > 0 && progress_rect.x + progress_rect.w == clear_rect.x + clear_rect.w) {
+			range = -1;
+		}else if (range < 0 && progress_rect.x == clear_rect.x){
+			range = 1;
+		}
+		progress_rect.x += range;
+		graphics.set_pen(WHITE);
+		graphics.rectangle(progress_rect);
+	}
 };
 
-TCHAR curr_path[256] = {0};
+ProgressBar loading_pg(Point(2*8*font_scale,(6*8+4)*font_scale), 0);
+
+bool repeating_timer_directory(struct repeating_timer *t) {
+	loading_pg.update();
+	st7789.update(&graphics);
+	return true;
+}
+
+char curr_path[256] = {0};
 size_t num_files;
 
 const size_t file_names_buffer_len = (256+13)*256;
-TCHAR file_names[file_names_buffer_len]; // Guarantee to hold 256 full length long (255+1) and short (12+1) file names
+char file_names[file_names_buffer_len]; // Guarantee to hold 256 full length long (255+1) and short (12+1) file names
 
 typedef struct  {
 	size_t short_name_index; // Always present, use for file operations, MSB bit set = directory
@@ -159,7 +179,7 @@ int file_entry_cmp(const void* p1, const void* p2) {
 	else return strcasecmp(&file_names[e1->long_name_index], &file_names[e2->long_name_index]);
 }
 
-size_t get_filename_ext(TCHAR *filename) {
+size_t get_filename_ext(char *filename) {
 	size_t l = strlen(filename);
 	size_t i=0;
 	while(i < l) {
@@ -172,10 +192,10 @@ size_t get_filename_ext(TCHAR *filename) {
 	return i;
 }
 
-enum file_type {disk, casette};
-file_type ft = file_type::disk;
+enum file_type {none, disk, casette};
+file_type ft = file_type::none;
 
-bool is_valid_file(TCHAR *filename) {
+bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
 	switch(ft) {
 		case file_type::casette:
@@ -229,7 +249,6 @@ uint8_t read_directory() {
 				}else{
 					size_t ls = strlen(fno.fname)+1;
 					if(current_file_name_index + ls + (is_directory_mask ? 1 : 0) > file_names_buffer_len) {
-						// TODO mark files left
 						ret = 2;
 						break;
 					}
@@ -241,62 +260,80 @@ uint8_t read_directory() {
 				}
 				num_files++;
 				if(num_files >= file_entries_len) {
-					// TODO mark files left
 					ret = 2;
 					break;
 				}
 			}
 			f_closedir(&dir);
 		} else {
-			// TODO mark no files
 			ret = 0;
 		}
 		f_mount(0, "", 1);
 		qsort((file_entry_type *)file_entries, num_files, sizeof(file_entry_type), file_entry_cmp);
 	} else {
-		// Mark no files
 		ret = 0;
 	}
 	return ret;
 }
 
-int8_t cursor_prev = -1;
-int8_t cursor_position = 1;
+int cursor_prev = -1;
+int cursor_position = 1;
 
 const std::string str_config = "Config...";
-std::string str_d1 = "D1:   <EMPTY>   ";
-std::string str_d2 = "D2:   <EMPTY>   ";
-std::string str_d3 = "D3:   <EMPTY>   ";
-std::string str_d4 = "D4:   <EMPTY>   ";
+std::string str_d1 = "D1:  <EMPTY>   ";
+std::string str_d2 = "D2:  <EMPTY>   ";
+std::string str_d3 = "D3:  <EMPTY>   ";
+std::string str_d4 = "D4:  <EMPTY>   ";
 const std::string str_rot_up = "Rotate Up";
 const std::string str_rot_down = "Rotate Down";
-std::string str_cas = "C:   <EMPTY>   ";
+std::string str_cas = "C:  <EMPTY>   ";
 const std::string str_rewind = "Rewind";
+
+const int menu_to_mount[] = {-1,0,1,2,3,-1,-1,4,-1};
+const file_type menu_to_type[] = {file_type::none, file_type::disk, file_type::disk, file_type::disk, file_type::disk, file_type::none, file_type::none, file_type::casette, file_type::none};
 
 typedef struct {
 	std::string *str;
-	int x;
-	int y;
+	char *mount_path;
+	bool mounted;
+} mounts_type;
+
+char d1_mount[256] = {0};
+char d2_mount[256] = {0};
+char d3_mount[256] = {0};
+char d4_mount[256] = {0};
+char c_mount[256] = {0};
+
+mounts_type mounts[] = {
+	{.str=&str_d1, .mount_path=d1_mount, .mounted=false},
+	{.str=&str_d2, .mount_path=d2_mount, .mounted=false},
+	{.str=&str_d3, .mount_path=d3_mount, .mounted=false},
+	{.str=&str_d4, .mount_path=d4_mount, .mounted=false},
+	{.str=&str_cas, .mount_path=c_mount, .mounted=false}
+};
+
+typedef struct {
+	std::string *str;
+	int x, y;
 	size_t wd;
 } menu_entry;
 
 const menu_entry menu_entries[] = {
 	{.str = (std::string*)&str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=str_config.length()},
-	{.str = &str_d1,.x=2*8*font_scale,.y=(3*8-4)*font_scale,.wd=str_d1.length()},
-	{.str = &str_d2,.x=2*8*font_scale,.y=(4*8-4)*font_scale,.wd=str_d2.length()},
-	{.str = &str_d3,.x=2*8*font_scale,.y=(5*8-4)*font_scale,.wd=str_d3.length()},
-	{.str = &str_d4,.x=2*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
+	{.str = &str_d1,.x=3*8*font_scale,.y=(3*8-4)*font_scale,.wd=str_d1.length()},
+	{.str = &str_d2,.x=3*8*font_scale,.y=(4*8-4)*font_scale,.wd=str_d2.length()},
+	{.str = &str_d3,.x=3*8*font_scale,.y=(5*8-4)*font_scale,.wd=str_d3.length()},
+	{.str = &str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
 	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
 	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
-	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
+	{.str = &str_cas,.x=4*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
 	{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
 };
 const size_t menu_entry_size = 9;
 
 typedef struct {
 	std::string *str;
-	int x;
-	int y;
+	int x, y;
 } button_entry;
 
 button_entry main_buttons[] {
@@ -311,7 +348,6 @@ button_entry nomedia_buttons[] {
 	{.str = &char_left,.x=font_scale,.y=(11*8-1)*font_scale}
 };
 const size_t nomedia_buttons_size = 1;
-
 
 void update_buttons(button_entry menu_buttons[], const int num_buttons) {
 	graphics.set_font(&symbol_font);
@@ -351,36 +387,23 @@ void update_main_menu() {
 		}
 
 	}
-	if((cursor_position >= 1 && cursor_position <=4) || cursor_position == 7) {
-		main_buttons[0].str = &char_eject;
+	int m = menu_to_mount[cursor_position];
+	if(m != -1) {
+		if(mounts[m].mounted)
+			main_buttons[0].str = &char_eject;
+		else if(mounts[m].mount_path[0])
+			main_buttons[0].str = &char_inject;
+		else
+			main_buttons[0].str = &char_empty;
 	}else{
 		main_buttons[0].str = &char_empty;
 	}
-	update_buttons(main_buttons, main_buttons_size);
+	update_buttons(main_buttons, cursor_prev == -1 ? main_buttons_size : 1);
 }
 
+std::string str_fit(13,' ');
 
-// selected files = curr_path + short_file_name of the selected file
-// read them from save state?
-
-/*
-	curr_path[0] = 0;
-	read_directory(); // TODO display some animation
-	text_location.x = 0;
-	text_location.y = 0;
-	for(int i=0;i<num_files;i++) {
-		if(i>10)
-			break;
-		print_text(&file_names[file_entries[i].long_name_index]);
-		text_location.y += 8*font_scale;
-		st7789.update(&graphics);
-	}
-*/
-
-std::string str_fit = "             ";
-
-void fit_str(TCHAR *s, int sl, int l) {
-	// l is either 12 (6, 1, 5) or 8 (4, 1, 3)
+void fit_str(char *s, int sl, int l) {
 	int h = l/2;
 	int i;
 	for(i=0; i < h; i++) str_fit[i] = s[i];
@@ -393,15 +416,7 @@ void fit_str(TCHAR *s, int sl, int l) {
 std::string *ptr_str_file_name;
 
 void update_one_display_file(int i, int fi) {
-	TCHAR *f = &file_names[file_entries[fi].long_name_index];
-	// Directory xxxxxxxxxxxxxxxxxxxx/
-	// Directory xxxxxxxxxxxxxxxxxx.ext/
-	// Directory xxx/
-	// Directory xxx.ext/
-	// File name xxxxxxxxxxxxxxxxxxx
-	// File name xxxxxxxxxxxxxxxxxxxxx.ext
-	// File name xxxx
-	// File name xxx.ext
+	char *f = &file_names[file_entries[fi].long_name_index];
 	size_t ei = get_filename_ext(f) - 1;
 	bool ext = (f[ei] == '.') ? true : false;
 	int pe = 8;
@@ -433,7 +448,7 @@ void update_one_display_file(int i, int fi) {
 	}
 	if(i == cursor_position) {
 		// TODO do scrolling thing
-		print_text(*ptr_str_file_name, ptr_str_file_name->length());
+		print_text(*ptr_str_file_name, pe);
 	} else {
 		print_text(*ptr_str_file_name);
 	}
@@ -441,8 +456,7 @@ void update_one_display_file(int i, int fi) {
 		delete ptr_str_file_name;
 }
 
-void update_display_files(int top_index) {
-	int shift_index = curr_path[0] ? 1 : 0;
+void update_display_files(int top_index, int shift_index) {
 	text_location.x = (3*8+4)*font_scale;
 	if(cursor_prev == -1) {
 		Rect r(text_location.x,8*font_scale,13*8*font_scale,11*8*font_scale);
@@ -475,60 +489,142 @@ void update_display_files(int top_index) {
 	}
 }
 
+int dir_browse_stack[128] = {0,0};
+
+
 void get_file(file_type t, int file_entry_index) {
-	static uint8_t get_file_cursor_position = 0;
-	static int top_index = 0;
+	static int dir_browse_stack_index=0;
+	if(t != ft) {
+		dir_browse_stack[dir_browse_stack_index] = 0;
+		dir_browse_stack[dir_browse_stack_index+1] = 0;
+	}
 	ft = t;
-	uint8_t saved_cursor_position = cursor_position;
-	cursor_position = get_file_cursor_position;
+	int saved_cursor_position = cursor_position;
 	cursor_prev = -1;
+	cursor_position = dir_browse_stack[dir_browse_stack_index];
+	int top_index = dir_browse_stack[dir_browse_stack_index+1];
 
 	main_buttons[0].str = &char_left;
-
-	// clean up screen
 	graphics.set_pen(BG); graphics.clear();
-	// display buttons
 
-	// Below do this in the loop, break only once window closed or file selected
-	// setup screen, initiate infinite progress bar (implement it)
+	while(true) {
+		// TODO progress bar init
+		struct repeating_timer timer;
+		add_repeating_timer_ms(200, repeating_timer_directory, NULL, &timer);
 
-	// on action button reset get_file_cursor_position to 0
-	uint8_t r = read_directory();
-	if(!r && curr_path[0]) {
-		curr_path[0] = 0;
-		r = read_directory();
-	}
-	// Kill the progress bar
-
-	graphics.set_pen(WHITE);
-
-	if(!r) {
-		// no media! only allow to close, no other buttons,
-		// leave just one button
-		// TODO
-
-		update_buttons(nomedia_buttons, nomedia_buttons_size);
-		st7789.update(&graphics);
-		while(!button_b.read())
-			tight_loop_contents();
-	}else{
-		update_buttons(main_buttons, main_buttons_size);
-		if(r == 2) {
-			text_location.x = (20-str_more_files.length())*4*font_scale;
-			text_location.y = 13*8*font_scale;
-			print_text(str_more_files, str_more_files.length());
+		uint8_t r = read_directory();
+		if(!r && curr_path[0]) {
+			curr_path[0] = 0;
+			r = read_directory();
 		}
-		update_display_files(top_index);
-		st7789.update(&graphics);
-		// 1 all available files are in the list
-		// 2 not all files are in the list
-		// if curr_path[0] != 0 the first entry is the up dir
-		// if 2 display info at the bottom that there are undisplayed files
-		// in inverse Max file limit!
+		// TODO Kill the progress bar
+		sleep_ms(10000);
+		cancel_repeating_timer(&timer);
+
+		if(!r) {
+			text_location.x = str_x(str_no_media.length());
+			text_location.y = 7*8*font_scale;
+			print_text(str_no_media, str_no_media.length());
+			update_buttons(nomedia_buttons, nomedia_buttons_size);
+			st7789.update(&graphics);
+			while(!button_b.read());
+			dir_browse_stack_index = 0;
+			break;
+		} else {
+			int shift_index = curr_path[0] ? 1 : 0;
+			update_buttons(main_buttons, main_buttons_size);
+			if(r == 2) {
+				text_location.x = str_x(str_more_files.length());
+				text_location.y = 13*8*font_scale;
+				print_text(str_more_files, str_more_files.length());
+			}
+			update_display_files(top_index, shift_index);
+			st7789.update(&graphics);
+			uint8_t b;
+			while(true) {
+				if(button_y.read()) {
+					b = 0; break;
+				}else if(button_x.read()) {
+					b = 1; break;
+				}else if(button_a.read()) {
+					b = 2; break;
+				}else if(button_b.read()) {
+					b = 3; break;
+				}
+			}
+			if(b == 0) {
+				// down
+				if(top_index+cursor_position < num_files+shift_index-1) {
+					if(cursor_position == 10) {
+						cursor_prev = -1;
+						cursor_position = 0;
+						top_index += 11;
+					} else {
+						cursor_prev = cursor_position;
+						cursor_position++;
+					}
+				}
+			}else if (b == 1) {
+				// up
+				if(top_index+cursor_position > 0) {
+					if(cursor_position == 0) {
+						cursor_prev = -1;
+						cursor_position = 10;
+						top_index -= 11;
+					} else {
+						cursor_prev = cursor_position;
+						cursor_position--;
+					}
+				}
+			}else if (b == 2) {
+				// enter
+				int fi = top_index+cursor_position-shift_index;
+				int i = strlen(curr_path);
+				if(fi == -1) {
+					dir_browse_stack_index -= 2;
+					top_index = dir_browse_stack[dir_browse_stack_index+1];
+					cursor_position = dir_browse_stack[dir_browse_stack_index];
+					cursor_prev = -1;
+					i -= 2;
+					while(curr_path[i] != '/' && i > 0) i--;
+					curr_path[i] = 0;
+				}else{
+					char *f = &file_names[file_entries[fi].short_name_index & 0x7FFFFFFF];
+					if(file_entries[fi].short_name_index & 0x80000000) {
+						dir_browse_stack[dir_browse_stack_index] = cursor_position;
+						dir_browse_stack[dir_browse_stack_index+1] = top_index;
+						dir_browse_stack_index += 2;
+						top_index = 0;
+						cursor_prev = -1;
+						cursor_position = 0;
+						strcpy(&curr_path[i], f);
+					} else {
+						// File
+						// file_entry_index = curr_path + short_file_name
+						mounts[file_entry_index].mounted = true;
+						strcpy(mounts[file_entry_index].mount_path, &curr_path[0]);
+						strcpy(&(mounts[file_entry_index].mount_path[i]), f);
+						i = 0;
+						int si = ft == file_type::disk ? 3 : 2;
+						while(i<12) {
+							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
+							i++;
+						}
+						break;
+					}
+				}
+
+			} else {
+				// exit
+				break;
+			}
+		}
 	}
+	dir_browse_stack[dir_browse_stack_index] = cursor_position;
+	dir_browse_stack[dir_browse_stack_index+1] = top_index;
 	cursor_position = saved_cursor_position;
+	cursor_prev = -1;
 	main_buttons[0].str = &char_eject;
-	// restore buttons
 }
 
 int main() {
@@ -540,14 +636,14 @@ int main() {
 	graphics.set_pen(BG); graphics.clear();
 
 	if(!button_a.read()) {
-		print_text(str_press_a_1, str_press_a_1.length());
+		print_text(str_press_a_1);
 		text_location.y += 12*font_scale;
-		print_text(str_press_a_2, str_press_a_2.length());
+		print_text(str_press_a_2);
 		st7789.update(&graphics);
 	}else
 		usb_drive();
 
-	ProgressBar pg(Point(text_location.x,text_location.y+12*font_scale), usb_boot_delay);
+	ProgressBar pg(Point(text_location.x,text_location.y+16*font_scale), usb_boot_delay);
 	st7789.update(&graphics);
 	uint32_t boot_time;
 	do {
@@ -561,19 +657,12 @@ int main() {
 
 	tud_mount_cb();
 
-
 	update_main_menu();
 	ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100);
 	st7789.update(&graphics);
 
-	get_file(file_type::casette, 5);
-
-	while(true)
-	  tight_loop_contents();
-
-
-/*
 	while(true) {
+		int d = menu_to_mount[cursor_position];
 		if(button_x.read() && cursor_position > 0) {
 			cursor_prev = cursor_position;
 			cursor_position--;
@@ -584,34 +673,32 @@ int main() {
 			cursor_position++;
 			update_main_menu();
 			st7789.update(&graphics);
+		}else if(button_a.read()){
+			if(d == -1) {
+				// React to:
+				// config, rotate up, rotate down, rewind
+			}else{
+				get_file(menu_to_type[cursor_position], d);
+				update_main_menu();
+				st7789.update(&graphics);
+			}
+
+		}else if(button_b.read()) {
+			if(d != -1) {
+				if(mounts[d].mounted) {
+					mounts[d].mounted = false;
+				}else{
+					if(mounts[d].mount_path[0])
+						mounts[d].mounted = true;
+				}
+				update_main_menu();
+				st7789.update(&graphics);
+			}
 		}
 	}
-*/
+
 	return 0;
 }
-
-
-
-// main
-// **********************
-// *                    *
-// *>     Config...    ^*
-// *                    *
-// *  D1:   <EMPTY>     *
-// *  D2:   <EMPTY>     *
-// *  D3:x12345678.910  *
-// *  D4:x12345678.910  *
-// *       .5           *
-// *     Rotate Up      *
-// *    Rotate Down     *
-// *                    *
-// *   C:x12345679.910  *
-// *   |||||||||||||||  *
-// *   |||||||||||||||  *
-// *E     Rewind       V*
-// *                    *
-// **********************
-
 
 void tud_mount_cb(void) {
 	if (!mount_fatfs_disk())
