@@ -305,11 +305,17 @@ button_entry main_buttons[] {
 	{.str = &char_up,.x=st7789.width-(9*font_scale),.y=(3*8+1)*font_scale},
 	{.str = &char_down,.x=st7789.width-(9*font_scale),.y=(11*8-1)*font_scale}
 };
-// const size_t main_buttons_size = 4;
+const size_t main_buttons_size = 4;
 
-void update_buttons(button_entry menu_buttons[]) {
+button_entry nomedia_buttons[] {
+	{.str = &char_left,.x=font_scale,.y=(11*8-1)*font_scale}
+};
+const size_t nomedia_buttons_size = 1;
+
+
+void update_buttons(button_entry menu_buttons[], const int num_buttons) {
 	graphics.set_font(&symbol_font);
-	for(int i=0; i<4;i++) {
+	for(int i=0; i<num_buttons;i++) {
 		text_location.x = menu_buttons[i].x;
 		text_location.y = menu_buttons[i].y;
 		graphics.set_pen(BG);
@@ -332,7 +338,6 @@ void update_main_menu() {
 		graphics.clear();
 		for(int i=0; i<menu_entry_size;i++)
 			update_menu_entry(i);
-
 	}else{
 		int i = cursor_prev;
 		while(true) {
@@ -351,10 +356,8 @@ void update_main_menu() {
 	}else{
 		main_buttons[0].str = &char_empty;
 	}
-	update_buttons(main_buttons);
+	update_buttons(main_buttons, main_buttons_size);
 }
-
-
 
 
 // selected files = curr_path + short_file_name of the selected file
@@ -401,51 +404,41 @@ void update_one_display_file(int i, int fi) {
 	// File name xxx.ext
 	size_t ei = get_filename_ext(f) - 1;
 	bool ext = (f[ei] == '.') ? true : false;
+	int pe = 8;
 	if (file_entries[fi].short_name_index & 0x80000000) {
-		int pe = ext ? 8 : 12;
+		if(!ext) pe = 12;
 		if(ei < pe) pe = ei;
 		std::string s2(&f[ei]);
 		text_location.x += pe*8*font_scale;
 		print_text(s2, i == cursor_position ? s2.length() : 0);
 		text_location.x -= pe*8*font_scale;
-		if(i != cursor_position && ei > pe) {
-			// TODO make new xxx~yyy string
-			// xxxx~yyy
-			fit_str(f, ei, pe);
-			ptr_str_file_name = &str_fit;
-			ei = pe;
-		}else{
-			ptr_str_file_name = new std::string(f, ei);
-		}
-		if(i == cursor_position) {
-			// TODO do scrolling thing
-			print_text(*ptr_str_file_name, ptr_str_file_name->length());
-		} else {
-			print_text(*ptr_str_file_name);
-		}
 	} else {
+		text_location.x += 8*8*font_scale;
 		if(ext) {
-			std::string s2(&f[ei]);
-			text_location.x += 8*8*font_scale;
-			print_text(s2, i == cursor_position ? 4 : 0);
-			text_location.x -= 8*8*font_scale;
+			print_text(std::string(&f[ei]), i == cursor_position ? 4 : 0);
 		}else{
+			if(i == cursor_position)
+				print_text("    ", 4);
 			ei++;
 		}
-		if(i != cursor_position && ei > 8) {
-			fit_str(f, ei, 8);
-			ptr_str_file_name = &str_fit;
-			ei = 8;
-		}else{
-		 	ptr_str_file_name = new std::string(f, ei);
-		}
-		if(i == cursor_position) {
-			// TODO do scrolling thing
-			print_text(*ptr_str_file_name, ptr_str_file_name->length());
-		} else {
-			print_text(*ptr_str_file_name);
-		}
+		text_location.x -= 8*8*font_scale;
 	}
+	if(i != cursor_position && ei > pe) {
+		fit_str(f, ei, pe);
+		ptr_str_file_name = &str_fit;
+		ei = pe;
+		pe = 0;
+	}else{
+		ptr_str_file_name = new std::string(f, ei);
+	}
+	if(i == cursor_position) {
+		// TODO do scrolling thing
+		print_text(*ptr_str_file_name, ptr_str_file_name->length());
+	} else {
+		print_text(*ptr_str_file_name);
+	}
+	if(pe)
+		delete ptr_str_file_name;
 }
 
 void update_display_files(int top_index) {
@@ -508,12 +501,18 @@ void get_file(file_type t, int file_entry_index) {
 	// Kill the progress bar
 
 	graphics.set_pen(WHITE);
-	update_buttons(main_buttons);
 
 	if(!r) {
 		// no media! only allow to close, no other buttons,
 		// leave just one button
+		// TODO
+
+		update_buttons(nomedia_buttons, nomedia_buttons_size);
+		st7789.update(&graphics);
+		while(!button_b.read())
+			tight_loop_contents();
 	}else{
+		update_buttons(main_buttons, main_buttons_size);
 		if(r == 2) {
 			text_location.x = (20-str_more_files.length())*4*font_scale;
 			text_location.y = 13*8*font_scale;
@@ -528,6 +527,7 @@ void get_file(file_type t, int file_entry_index) {
 		// in inverse Max file limit!
 	}
 	cursor_position = saved_cursor_position;
+	main_buttons[0].str = &char_eject;
 	// restore buttons
 }
 
