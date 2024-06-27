@@ -84,7 +84,7 @@ void cdc_task(void) {
 }
 
 bool repeating_timer_file_transfer(struct repeating_timer *t) {
-	static uint32_t dy = 1;
+	static int dy = 1;
 	graphics.set_pen(BG); graphics.clear();
 	text_location.y += dy;
 	if(text_location.y == st7789.height-8*font_scale-1) dy = -1;
@@ -93,6 +93,37 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	st7789.update(&graphics);
 	return true;
 }
+
+std::string *ptr_str_file_name;
+
+// volatile Rect *scroll_rect;
+size_t scroll_length = 0;
+size_t scroll_size = 0;
+size_t scroll_index = 0;
+int scroll_d = 1;
+int scroll_x, scroll_y;
+std::string *scroll_ptr = nullptr;
+
+
+bool repeating_timer_file_scroll() {
+	static int repeat = 0;
+	repeat++;
+	if(scroll_ptr == nullptr || repeat % 20 != 0)
+		return true;
+	if(scroll_d > 0 && scroll_index + scroll_size == scroll_length)
+		scroll_d = -1;
+	else if(scroll_d < 0 && scroll_index == 0)
+		scroll_d = 1;
+	scroll_index += scroll_d;
+	text_location.x = scroll_x;
+	text_location.y = scroll_y;
+	// scroll_size + 1 in both places
+	// setup clip
+	print_text((*scroll_ptr).substr(scroll_index,scroll_size),scroll_size);
+	st7789.update(&graphics);
+	return true;
+}
+
 
 void usb_drive() {
 	graphics.set_pen(BG); graphics.clear();
@@ -116,15 +147,23 @@ struct ProgressBar {
 	Rect progress_rect;
 	const Rect clear_rect;
 	const uint32_t progress_range;
-	ProgressBar(const Point &p, int r) :
+	ProgressBar(const Point &p, int r, int s=0) :
 			range(!r ? 1 : r),
-			progress_rect(p.x+4*font_scale,p.y+4*font_scale,r ? 0 : 16,8*font_scale),
+			progress_rect(p.x+4*font_scale,p.y+4*font_scale,r ? s : 8*8*font_scale ,8*font_scale),
 			clear_rect(p.x+4*font_scale,p.y+4*font_scale,st7789.width-2*p.x-8*font_scale,8*font_scale),
 			progress_range(st7789.width-2*p.x-8*font_scale) {
-		Rect rect(p.x, p.y, progress_range+8*font_scale, 16*font_scale);
+		Rect rect(p.x, p.y-4*font_scale, progress_range+8*font_scale, 24*font_scale);
+		if(!r) {
+			graphics.set_pen(BG);
+			graphics.rectangle(rect);
+		}
+		rect.y += 4*font_scale;
+		rect.h -= 8*font_scale;
 		graphics.set_pen(WHITE); graphics.rectangle(rect);
 		rect.deflate(2*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(rect);
+		if(r && s)
+			update(s);
 	}
 	void update(uint32_t step) {
 		if(range < 2)
@@ -149,10 +188,10 @@ struct ProgressBar {
 	}
 };
 
-ProgressBar loading_pg(Point(2*8*font_scale,(6*8+4)*font_scale), 0);
+ProgressBar *loading_pg;
 
 bool repeating_timer_directory(struct repeating_timer *t) {
-	loading_pg.update();
+	loading_pg->update();
 	st7789.update(&graphics);
 	return true;
 }
@@ -182,13 +221,7 @@ int file_entry_cmp(const void* p1, const void* p2) {
 size_t get_filename_ext(char *filename) {
 	size_t l = strlen(filename);
 	size_t i=0;
-	while(i < l) {
-		if(filename[i] == '.') {
-			i++;
-			break;
-		}
-		i++;
-	}
+	while(i < l && filename[i++] != '.');
 	return i;
 }
 
@@ -234,7 +267,6 @@ uint8_t read_directory() {
 					size_t ls = strlen(fno.altname)+1;
 					size_t ll = strlen(fno.fname)+1;
 					if(current_file_name_index + ls + ll + (is_directory_mask ? 2 : 0) > file_names_buffer_len) {
-						// TODO mark files left
 						ret = 2;
 						break;
 					}
@@ -290,7 +322,13 @@ std::string str_cas = "C:  <EMPTY>   ";
 const std::string str_rewind = "Rewind";
 
 const int menu_to_mount[] = {-1,0,1,2,3,-1,-1,4,-1};
-const file_type menu_to_type[] = {file_type::none, file_type::disk, file_type::disk, file_type::disk, file_type::disk, file_type::none, file_type::none, file_type::casette, file_type::none};
+const file_type menu_to_type[] = {
+	file_type::none,
+	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
+	file_type::none, file_type::none,
+	file_type::casette,
+	file_type::none
+};
 
 typedef struct {
 	std::string *str;
@@ -374,6 +412,7 @@ void update_main_menu() {
 		graphics.clear();
 		for(int i=0; i<menu_entry_size;i++)
 			update_menu_entry(i);
+		ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100, 15);
 	}else{
 		int i = cursor_prev;
 		while(true) {
@@ -399,6 +438,7 @@ void update_main_menu() {
 		main_buttons[0].str = &char_empty;
 	}
 	update_buttons(main_buttons, cursor_prev == -1 ? main_buttons_size : 1);
+	st7789.update(&graphics);
 }
 
 std::string str_fit(13,' ');
@@ -413,7 +453,6 @@ void fit_str(char *s, int sl, int l) {
 	str_fit[i] = 0;
 }
 
-std::string *ptr_str_file_name;
 
 void update_one_display_file(int i, int fi) {
 	char *f = &file_names[file_entries[fi].long_name_index];
@@ -447,8 +486,20 @@ void update_one_display_file(int i, int fi) {
 		ptr_str_file_name = new std::string(f, ei);
 	}
 	if(i == cursor_position) {
-		// TODO do scrolling thing
-		print_text(*ptr_str_file_name, pe);
+		print_text((*ptr_str_file_name).substr(0,pe), pe);
+		if(ei > pe) {
+			// TODO do scrolling thing
+			// scroll_rect = new Rect(text_location.x,text_location.y, pe, 8*font_scale);
+			scroll_ptr = ptr_str_file_name;
+			scroll_x = text_location.x;
+			scroll_y = text_location.y;
+			scroll_length = ei;
+			scroll_size = pe;
+			scroll_index = 0;
+			scroll_d = 1;
+			pe = 0;
+		}
+		// init scroll text text_location.x, text_location.y, width pe
 	} else {
 		print_text(*ptr_str_file_name);
 	}
@@ -457,14 +508,15 @@ void update_one_display_file(int i, int fi) {
 }
 
 void update_display_files(int top_index, int shift_index) {
+	scroll_length = 0;
 	text_location.x = (3*8+4)*font_scale;
 	if(cursor_prev == -1) {
-		Rect r(text_location.x,8*font_scale,13*8*font_scale,11*8*font_scale);
+		Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,11*8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
 		for(int i = 0; i<11; i++) {
 			text_location.y = 8*(1+i)*font_scale;
 			if(!i && !top_index && shift_index) {
-				print_text(str_up_dir, i == cursor_position ? 13 : 0);
+				print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
 			} else {
 				int fi = top_index+i-shift_index;
 				if(fi >= num_files)
@@ -479,7 +531,7 @@ void update_display_files(int top_index, int shift_index) {
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 			if(!i && !top_index && shift_index)
-				print_text(str_up_dir, i == cursor_position ? 13 : 0);
+				print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
 			else
 				update_one_display_file(i, top_index+i-shift_index);
 			if(i == cursor_position)
@@ -489,8 +541,7 @@ void update_display_files(int top_index, int shift_index) {
 	}
 }
 
-int dir_browse_stack[128] = {0,0};
-
+int dir_browse_stack[128];
 
 void get_file(file_type t, int file_entry_index) {
 	static int dir_browse_stack_index=0;
@@ -508,20 +559,22 @@ void get_file(file_type t, int file_entry_index) {
 	graphics.set_pen(BG); graphics.clear();
 
 	while(true) {
-		// TODO progress bar init
+		loading_pg = new ProgressBar(Point(2*8*font_scale,(6*8+4)*font_scale), 0);
+
 		struct repeating_timer timer;
-		add_repeating_timer_ms(200, repeating_timer_directory, NULL, &timer);
+		add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
 
 		uint8_t r = read_directory();
 		if(!r && curr_path[0]) {
 			curr_path[0] = 0;
 			r = read_directory();
 		}
-		// TODO Kill the progress bar
-		sleep_ms(10000);
+		// sleep_ms(1000); For testing
 		cancel_repeating_timer(&timer);
+		delete loading_pg;
 
 		if(!r) {
+			graphics.set_pen(BG); graphics.clear();
 			text_location.x = str_x(str_no_media.length());
 			text_location.y = 7*8*font_scale;
 			print_text(str_no_media, str_no_media.length());
@@ -529,31 +582,23 @@ void get_file(file_type t, int file_entry_index) {
 			st7789.update(&graphics);
 			while(!button_b.read());
 			dir_browse_stack_index = 0;
-			break;
-		} else {
-			int shift_index = curr_path[0] ? 1 : 0;
-			update_buttons(main_buttons, main_buttons_size);
-			if(r == 2) {
-				text_location.x = str_x(str_more_files.length());
-				text_location.y = 13*8*font_scale;
-				print_text(str_more_files, str_more_files.length());
-			}
-			update_display_files(top_index, shift_index);
-			st7789.update(&graphics);
-			uint8_t b;
-			while(true) {
-				if(button_y.read()) {
-					b = 0; break;
-				}else if(button_x.read()) {
-					b = 1; break;
-				}else if(button_a.read()) {
-					b = 2; break;
-				}else if(button_b.read()) {
-					b = 3; break;
-				}
-			}
-			if(b == 0) {
-				// down
+			dir_browse_stack[0] = 0;
+			dir_browse_stack[1] = 0;
+			goto get_file_exit;
+		}
+
+		int shift_index = curr_path[0] ? 1 : 0;
+		update_buttons(main_buttons, main_buttons_size);
+		if(r == 2) {
+			text_location.x = str_x(str_more_files.length());
+			text_location.y = 13*8*font_scale;
+			print_text(str_more_files, str_more_files.length());
+		}
+		update_display_files(top_index, shift_index);
+		st7789.update(&graphics);
+		while(true) {
+			// do one scroll step
+			if(button_y.read()) {
 				if(top_index+cursor_position < num_files+shift_index-1) {
 					if(cursor_position == 10) {
 						cursor_prev = -1;
@@ -563,9 +608,11 @@ void get_file(file_type t, int file_entry_index) {
 						cursor_prev = cursor_position;
 						cursor_position++;
 					}
+					delete scroll_ptr; scroll_ptr = nullptr;
+					update_display_files(top_index, shift_index);
+					st7789.update(&graphics);
 				}
-			}else if (b == 1) {
-				// up
+			}else if(button_x.read()) {
 				if(top_index+cursor_position > 0) {
 					if(cursor_position == 0) {
 						cursor_prev = -1;
@@ -575,9 +622,11 @@ void get_file(file_type t, int file_entry_index) {
 						cursor_prev = cursor_position;
 						cursor_position--;
 					}
+					delete scroll_ptr; scroll_ptr = nullptr;
+					update_display_files(top_index, shift_index);
+					st7789.update(&graphics);
 				}
-			}else if (b == 2) {
-				// enter
+			}else if(button_a.read()) {
 				int fi = top_index+cursor_position-shift_index;
 				int i = strlen(curr_path);
 				if(fi == -1) {
@@ -588,7 +637,8 @@ void get_file(file_type t, int file_entry_index) {
 					i -= 2;
 					while(curr_path[i] != '/' && i > 0) i--;
 					curr_path[i] = 0;
-				}else{
+					break;
+				} else {
 					char *f = &file_names[file_entries[fi].short_name_index & 0x7FFFFFFF];
 					if(file_entries[fi].short_name_index & 0x80000000) {
 						dir_browse_stack[dir_browse_stack_index] = cursor_position;
@@ -598,9 +648,8 @@ void get_file(file_type t, int file_entry_index) {
 						cursor_prev = -1;
 						cursor_position = 0;
 						strcpy(&curr_path[i], f);
+						break;
 					} else {
-						// File
-						// file_entry_index = curr_path + short_file_name
 						mounts[file_entry_index].mounted = true;
 						strcpy(mounts[file_entry_index].mount_path, &curr_path[0]);
 						strcpy(&(mounts[file_entry_index].mount_path[i]), f);
@@ -610,16 +659,17 @@ void get_file(file_type t, int file_entry_index) {
 							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
 							i++;
 						}
-						break;
+						goto get_file_exit;
 					}
 				}
-
-			} else {
-				// exit
-				break;
+			} else if(button_b.read()) {
+				goto get_file_exit;
 			}
+			sleep_ms(20);
+			repeating_timer_file_scroll();
 		}
 	}
+get_file_exit:
 	dir_browse_stack[dir_browse_stack_index] = cursor_position;
 	dir_browse_stack[dir_browse_stack_index+1] = top_index;
 	cursor_position = saved_cursor_position;
@@ -656,10 +706,7 @@ int main() {
 	}while(boot_time <= usb_boot_delay);
 
 	tud_mount_cb();
-
 	update_main_menu();
-	ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100);
-	st7789.update(&graphics);
 
 	while(true) {
 		int d = menu_to_mount[cursor_position];
@@ -667,12 +714,10 @@ int main() {
 			cursor_prev = cursor_position;
 			cursor_position--;
 			update_main_menu();
-			st7789.update(&graphics);
 		}else if(button_y.read() && cursor_position < menu_entry_size-1) {
 			cursor_prev = cursor_position;
 			cursor_position++;
 			update_main_menu();
-			st7789.update(&graphics);
 		}else if(button_a.read()){
 			if(d == -1) {
 				// React to:
@@ -680,7 +725,6 @@ int main() {
 			}else{
 				get_file(menu_to_type[cursor_position], d);
 				update_main_menu();
-				st7789.update(&graphics);
 			}
 
 		}else if(button_b.read()) {
@@ -692,11 +736,10 @@ int main() {
 						mounts[d].mounted = true;
 				}
 				update_main_menu();
-				st7789.update(&graphics);
 			}
 		}
+		sleep_ms(20);
 	}
-
 	return 0;
 }
 
