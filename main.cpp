@@ -96,32 +96,59 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 
 std::string *ptr_str_file_name;
 
-// volatile Rect *scroll_rect;
-size_t scroll_length = 0;
-size_t scroll_size = 0;
-size_t scroll_index = 0;
-int scroll_d = 1;
-int scroll_x, scroll_y;
+const int scroll_fine_step = 4;
+size_t scroll_length, scroll_size, scroll_index;
+int scroll_x, scroll_y, scroll_d, scroll_fine;
 std::string *scroll_ptr = nullptr;
 
+/*
+scroll_ptr = ptr_str_file_name;
+scroll_x = text_location.x;
+scroll_y = text_location.y;
+scroll_length = ei;
+scroll_size = pe;
+scroll_index = 0;
+scroll_d = 1;
+scroll_fine = -scroll_fine_step;
+*/
 
-bool repeating_timer_file_scroll() {
-	static int repeat = 0;
-	repeat++;
-	if(scroll_ptr == nullptr || repeat % 20 != 0)
-		return true;
-	if(scroll_d > 0 && scroll_index + scroll_size == scroll_length)
-		scroll_d = -1;
-	else if(scroll_d < 0 && scroll_index == 0)
-		scroll_d = 1;
-	scroll_index += scroll_d;
-	text_location.x = scroll_x;
+void init_scroll_long_filename(std::string *s_ptr, int s_x, int s_y, size_t s_size, size_t s_length) {
+	scroll_ptr = s_ptr;
+	scroll_x = s_x;
+	scroll_y = s_y;
+	scroll_size = s_size;
+	scroll_length = s_length;
+	scroll_d = 1;
+	scroll_index = 0;
+	scroll_fine = -scroll_fine_step;
+}
+
+void scroll_long_filename() {
+	if(scroll_ptr == nullptr) return;
+	scroll_fine += scroll_d*scroll_fine_step;
+	if(scroll_d > 0 && scroll_fine == 8*font_scale) {
+		scroll_fine = 0;
+		scroll_index += scroll_d;
+		if(scroll_index + scroll_size == scroll_length) {
+			scroll_d = -1;
+			scroll_fine = 8*font_scale;
+			scroll_index--;
+		}
+	}else if(scroll_d < 0 && scroll_fine == -scroll_fine_step) {
+		scroll_fine = 8*font_scale-scroll_fine_step;
+		scroll_index += scroll_d;
+		if(scroll_index == -1) {
+			scroll_d = 1;
+			scroll_fine = -scroll_fine_step;
+			scroll_index++;
+		}
+	}
+	text_location.x = scroll_x - scroll_fine;
 	text_location.y = scroll_y;
-	// scroll_size + 1 in both places
-	// setup clip
-	print_text((*scroll_ptr).substr(scroll_index,scroll_size),scroll_size);
+	graphics.set_clip(Rect(scroll_x,scroll_y,scroll_size*8*font_scale,8*font_scale));
+	print_text((*scroll_ptr).substr(scroll_index,scroll_size+1),scroll_size+1);
+	graphics.remove_clip();
 	st7789.update(&graphics);
-	return true;
 }
 
 
@@ -203,8 +230,8 @@ const size_t file_names_buffer_len = (256+13)*256;
 char file_names[file_names_buffer_len]; // Guarantee to hold 256 full length long (255+1) and short (12+1) file names
 
 typedef struct  {
-	size_t short_name_index; // Always present, use for file operations, MSB bit set = directory
-	size_t long_name_index; // Potentially present (if different from short), use for displaying
+	size_t short_name_index; // Use for file operations, MSB bit set = directory
+	size_t long_name_index; // Use for displaying in file selection
 } file_entry_type;
 
 const size_t file_entries_len = 2048;
@@ -453,7 +480,6 @@ void fit_str(char *s, int sl, int l) {
 	str_fit[i] = 0;
 }
 
-
 void update_one_display_file(int i, int fi) {
 	char *f = &file_names[file_entries[fi].long_name_index];
 	size_t ei = get_filename_ext(f) - 1;
@@ -488,18 +514,9 @@ void update_one_display_file(int i, int fi) {
 	if(i == cursor_position) {
 		print_text((*ptr_str_file_name).substr(0,pe), pe);
 		if(ei > pe) {
-			// TODO do scrolling thing
-			// scroll_rect = new Rect(text_location.x,text_location.y, pe, 8*font_scale);
-			scroll_ptr = ptr_str_file_name;
-			scroll_x = text_location.x;
-			scroll_y = text_location.y;
-			scroll_length = ei;
-			scroll_size = pe;
-			scroll_index = 0;
-			scroll_d = 1;
+			init_scroll_long_filename(ptr_str_file_name, text_location.x, text_location.y, pe, ei);
 			pe = 0;
 		}
-		// init scroll text text_location.x, text_location.y, width pe
 	} else {
 		print_text(*ptr_str_file_name);
 	}
@@ -597,7 +614,6 @@ void get_file(file_type t, int file_entry_index) {
 		update_display_files(top_index, shift_index);
 		st7789.update(&graphics);
 		while(true) {
-			// do one scroll step
 			if(button_y.read()) {
 				if(top_index+cursor_position < num_files+shift_index-1) {
 					if(cursor_position == 10) {
@@ -629,6 +645,7 @@ void get_file(file_type t, int file_entry_index) {
 			}else if(button_a.read()) {
 				int fi = top_index+cursor_position-shift_index;
 				int i = strlen(curr_path);
+				delete scroll_ptr; scroll_ptr = nullptr;
 				if(fi == -1) {
 					dir_browse_stack_index -= 2;
 					top_index = dir_browse_stack[dir_browse_stack_index+1];
@@ -663,10 +680,11 @@ void get_file(file_type t, int file_entry_index) {
 					}
 				}
 			} else if(button_b.read()) {
+				delete scroll_ptr; scroll_ptr = nullptr;
 				goto get_file_exit;
 			}
 			sleep_ms(20);
-			repeating_timer_file_scroll();
+			scroll_long_filename();
 		}
 	}
 get_file_exit:
