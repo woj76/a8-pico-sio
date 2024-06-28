@@ -28,8 +28,10 @@
 const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
-const std::string str_press_a_1 = "Press 'A' for";
-const std::string str_press_a_2 = "USB drive...";
+const std::string str_press_a_1 = "Press ";
+const std::string str_press_a_2 = "A";
+const std::string str_press_a_3 = " for";
+const std::string str_press_a_4 = "USB drive...";
 const std::string str_up_dir = "../";
 const std::string str_more_files = "[Max files!]";
 const std::string str_no_media = "No media!?";
@@ -50,7 +52,7 @@ PicoGraphics_PenP4 graphics(st7789.width, st7789.height, nullptr);
 uint32_t inline str_x(uint32_t l) { return (st7789.width - l*8*font_scale)/2; }
 uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
-Point text_location(str_x(std::max(str_press_a_1.length(),str_press_a_2.length())), str_y(5)-4*font_scale);
+Point text_location(str_x(str_press_a_4.length()), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 0);
 
@@ -96,21 +98,12 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 
 std::string *ptr_str_file_name;
 
+// TODO The scroll thing could be a C++ struct/class? like ProgressBar
+
 const int scroll_fine_step = 4;
 size_t scroll_length, scroll_size, scroll_index;
 int scroll_x, scroll_y, scroll_d, scroll_fine;
 std::string *scroll_ptr = nullptr;
-
-/*
-scroll_ptr = ptr_str_file_name;
-scroll_x = text_location.x;
-scroll_y = text_location.y;
-scroll_length = ei;
-scroll_size = pe;
-scroll_index = 0;
-scroll_d = 1;
-scroll_fine = -scroll_fine_step;
-*/
 
 void init_scroll_long_filename(std::string *s_ptr, int s_x, int s_y, size_t s_size, size_t s_length) {
 	scroll_ptr = s_ptr;
@@ -150,7 +143,6 @@ void scroll_long_filename() {
 	graphics.remove_clip();
 	st7789.update(&graphics);
 }
-
 
 void usb_drive() {
 	graphics.set_pen(BG); graphics.clear();
@@ -439,6 +431,7 @@ void update_main_menu() {
 		graphics.clear();
 		for(int i=0; i<menu_entry_size;i++)
 			update_menu_entry(i);
+		// TODO this needs to be global
 		ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100, 15);
 	}else{
 		int i = cursor_prev;
@@ -559,9 +552,9 @@ void update_display_files(int top_index, int shift_index) {
 }
 
 int dir_browse_stack[128];
+int dir_browse_stack_index=0;
 
 void get_file(file_type t, int file_entry_index) {
-	static int dir_browse_stack_index=0;
 	if(t != ft) {
 		dir_browse_stack[dir_browse_stack_index] = 0;
 		dir_browse_stack[dir_browse_stack_index+1] = 0;
@@ -652,7 +645,7 @@ void get_file(file_type t, int file_entry_index) {
 					cursor_position = dir_browse_stack[dir_browse_stack_index];
 					cursor_prev = -1;
 					i -= 2;
-					while(curr_path[i] != '/' && i > 0) i--;
+					while(curr_path[i] != '/' && i) i--;
 					curr_path[i] = 0;
 					break;
 				} else {
@@ -704,9 +697,15 @@ int main() {
 	graphics.set_pen(BG); graphics.clear();
 
 	if(!button_a.read()) {
+		int x = text_location.x;
 		print_text(str_press_a_1);
+		text_location.x += str_press_a_1.length()*8*font_scale;
+		print_text(str_press_a_2, 1);
+		text_location.x += 8*font_scale;
+		print_text(str_press_a_3);
+		text_location.x = x;
 		text_location.y += 12*font_scale;
-		print_text(str_press_a_2);
+		print_text(str_press_a_4);
 		st7789.update(&graphics);
 	}else
 		usb_drive();
