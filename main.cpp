@@ -1,6 +1,14 @@
 // Useful links:
 // https://forums.raspberrypi.com/viewtopic.php?t=349257
 // https://github.com/TheMontezuma/SIO2BSD
+// https://forums.atariage.com/topic/290397-atari-sio-transmission-oscillogram/
+// https://www.atarimax.com/jindroush.atari.org/asio.html
+// https://github.com/HiassofT/highspeed-sio/blob/master/README.txt
+// https://tnt23.livejournal.com/605184.html
+// http://ftp.pigwa.net/stuff/collections/nir_dary_cds/Tech%20Info/The%20SIO%20protocol%20description/sio.html
+// https://allpinouts.org/pinouts/connectors/serial/atari-8-bit-serial-input-output-sio/
+
+// https://forums.atariage.com/topic/271215-why-the-k-on-boot/?do=findComment&comment=4209492
 
 // Config:
 // Turbo system:
@@ -244,7 +252,7 @@ size_t get_filename_ext(char *filename) {
 	return i;
 }
 
-enum file_type {none, disk, casette};
+enum file_type {none, boot, disk, casette};
 file_type ft = file_type::none;
 
 bool is_valid_file(char *filename) {
@@ -252,8 +260,9 @@ bool is_valid_file(char *filename) {
 	switch(ft) {
 		case file_type::casette:
 			return strcasecmp(&filename[i], "CAS") == 0 || strcasecmp(&filename[i], "WAV") == 0;
+		case file_type::boot:
 		case file_type::disk:
-			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || strcasecmp(&filename[i], "XEX") == 0;
+			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || (ft == file_type::boot ? strcasecmp(&filename[i], "XEX") == 0 : 0);
 		default:
 			return false;
 	}
@@ -343,7 +352,9 @@ const std::string str_rewind = "Rewind";
 const int menu_to_mount[] = {-1,0,1,2,3,-1,-1,4,-1};
 const file_type menu_to_type[] = {
 	file_type::none,
-	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
+	// TODO With e.g. U1MB theoreticall all D: are bootable, but then the (kboot?) XEX loader
+	// needs to account for the drive number.
+	file_type::boot, file_type::disk, file_type::disk, file_type::disk,
 	file_type::none, file_type::none,
 	file_type::casette,
 	file_type::none
@@ -605,6 +616,12 @@ void get_file(file_type t, int file_entry_index) {
 			print_text(str_more_files, str_more_files.length());
 		}
 		update_display_files(top_index, shift_index);
+		int y1 = main_buttons[2].y+10*font_scale, y2 = main_buttons[3].y-2*font_scale;
+		int scroll_block_len = (y2-y1) / (num_files / 11 + (num_files % 11 ? 1 : 0));
+		Rect scroll_bar(st7789.width - 7*font_scale, y1, 4*font_scale, y2-y1);
+		graphics.set_pen(BG); graphics.rectangle(scroll_bar);
+		scroll_bar.h = scroll_block_len;
+		graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
 		st7789.update(&graphics);
 		while(true) {
 			if(button_y.read()) {
@@ -613,6 +630,9 @@ void get_file(file_type t, int file_entry_index) {
 						cursor_prev = -1;
 						cursor_position = 0;
 						top_index += 11;
+						graphics.set_pen(BG); graphics.rectangle(scroll_bar);
+						scroll_bar.y += scroll_block_len;
+						graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
 					} else {
 						cursor_prev = cursor_position;
 						cursor_position++;
@@ -627,6 +647,9 @@ void get_file(file_type t, int file_entry_index) {
 						cursor_prev = -1;
 						cursor_position = 10;
 						top_index -= 11;
+						graphics.set_pen(BG); graphics.rectangle(scroll_bar);
+						scroll_bar.y -= scroll_block_len;
+						graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
 					} else {
 						cursor_prev = cursor_position;
 						cursor_position--;
