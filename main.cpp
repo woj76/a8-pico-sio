@@ -20,6 +20,7 @@
 #include <string.h>
 #include <cstdlib>
 
+#include "pico/multicore.h"
 #include "pico/time.h"
 #include "tusb.h"
 #include "fatfs_disk.h"
@@ -349,10 +350,10 @@ const std::string str_rot_down = "Rotate Down";
 std::string str_cas = "C:  <EMPTY>   ";
 const std::string str_rewind = "Rewind";
 
-const int menu_to_mount[] = {-1,0,1,2,3,-1,-1,4,-1};
+const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
 const file_type menu_to_type[] = {
 	file_type::none,
-	// TODO With e.g. U1MB theoreticall all D: are bootable, but then the (kboot?) XEX loader
+	// TODO With e.g. U1MB theoretically all D: are bootable, but then the (kboot?) XEX loader
 	// needs to account for the drive number.
 	file_type::boot, file_type::disk, file_type::disk, file_type::disk,
 	file_type::none, file_type::none,
@@ -362,23 +363,242 @@ const file_type menu_to_type[] = {
 
 typedef struct {
 	std::string *str;
-	char *mount_path;
-	bool mounted;
+	volatile char *mount_path;
+	volatile bool mounted;
+	/* status:
+		if 0 the file header needs to be processed, if this fails:
+			set mounted to false
+			set status to -1
+			mark on screen with a suitable icon
+			TODO main screen needs to check for mounts regularly to change button icons
+		opening a new file / injecting sets status to 0
+		for C: current index to the file being read to use with f_lseek
+		for Dx: 0 yet to be opened, >0 sector size of the mounted ATR and ATR header verified
+
+	*/
+	volatile FSIZE_t status;
 } mounts_type;
 
-char d1_mount[256] = {0};
-char d2_mount[256] = {0};
-char d3_mount[256] = {0};
-char d4_mount[256] = {0};
-char c_mount[256] = {0};
+volatile char d1_mount[256] = {0};
+volatile char d2_mount[256] = {0};
+volatile char d3_mount[256] = {0};
+volatile char d4_mount[256] = {0};
+volatile char c_mount[256] = {0};
 
-mounts_type mounts[] = {
-	{.str=&str_d1, .mount_path=d1_mount, .mounted=false},
-	{.str=&str_d2, .mount_path=d2_mount, .mounted=false},
-	{.str=&str_d3, .mount_path=d3_mount, .mounted=false},
-	{.str=&str_d4, .mount_path=d4_mount, .mounted=false},
-	{.str=&str_cas, .mount_path=c_mount, .mounted=false}
+volatile mounts_type mounts[] = {
+	{.str=&str_cas, .mount_path=c_mount, .mounted=false, .status = 0},
+	{.str=&str_d1, .mount_path=d1_mount, .mounted=false, .status = 0},
+	{.str=&str_d2, .mount_path=d2_mount, .mounted=false, .status = 0},
+	{.str=&str_d3, .mount_path=d3_mount, .mounted=false, .status = 0},
+	{.str=&str_d4, .mount_path=d4_mount, .mounted=false, .status = 0}
 };
+
+/*
+  // Init serial port to 19200 baud
+  // Blocking lock for FS access
+  // FSIZE_t (DWORD)
+  // while(true)
+  // go through mounts that are true and status 0: try to validate the file and set status accordingly
+
+  // if motor on and cas mounted: process next "block" for cas: in buffered increments process one complete data block,
+  // pause of motor check once so often
+  //   if this is normal C:, set the baud rate first if it is a regular data block, then revert to the old one
+
+  // otherwise, check if command line low and serial read waiting, act accordingly
+
+
+*/
+
+char sector_buffer[512];
+
+const uint32_t cas_header_signature = 0x494A5546; // FUJI in reverse
+const uint32_t cas_header_pwms = 0x736D7770;
+const uint32_t cas_header_pwmc = 0x636D7770;
+const uint32_t cas_header_pwmd = 0x646D7770;
+const uint32_t cas_header_pwml = 0x6C6D7770;
+
+typedef struct __attribute__((__packed__)) {
+	uint32_t signature;
+	uint16_t chunk_length;
+	uint8_t aux1; // TODO make this a union
+	uint8_t aux2;
+} cas_header_type;
+
+cas_header_type cas_header;
+FSIZE_t cas_size;
+uint8_t pwm_bit_order; // 0 - LSB first, 1 MSB first
+uint8_t pwm_bit; // next bit to transmit
+uint16_t pwm_sample_duration; // in us
+uint16_t pwm_silence_duration;
+uint16_t pwm_block_index;
+uint16_t pwm_block_multiple;
+
+
+FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
+	UINT bytes_read;
+	while(true) {
+		if(f_read(fil, &cas_header, sizeof(cas_header_type), &bytes_read) != FR_OK || bytes_read != sizeof(cas_header_type)) {
+			offset = -1;
+			goto cas_read_forward_exit;
+		}
+		offset += bytes_read;
+		pwm_block_index = 0;
+		switch(cas_header.signature) {
+			case cas_header_pwms:
+				if(cas_header.chunk_length != 2) {
+					offset = -1;
+					goto cas_read_forward_exit;
+				}
+				pwm_bit_order = (cas_header.aux1 >> 2) & 0x1;
+				cas_header.aux1 &= 0x3;
+				if(cas_header.aux1 == 0b01)
+					pwm_bit = 0;
+				else if(cas_header.aux1 == 0b10)
+					pwm_bit = 1;
+				else {
+					offset = -1;
+					goto cas_read_forward_exit;
+				}
+				if(f_read(fil, &pwm_sample_duration, sizeof(uint16_t), &bytes_read) != FR_OK || bytes_read != sizeof(uint16_t)) {
+					offset = -1;
+					goto cas_read_forward_exit;
+				}
+				offset += bytes_read;
+				pwm_sample_duration = (500000+pwm_sample_duration/2)/pwm_sample_duration;
+				break;
+			case cas_header_pwmc:
+				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_block_multiple = 3;
+				goto cas_read_forward_exit;
+			case cas_header_pwmd:
+				pwm_silence_duration = 0;
+				pwm_block_multiple = 1;
+				goto cas_read_forward_exit;
+			case cas_header_pwml:
+				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_block_multiple = 2;
+				goto cas_read_forward_exit;
+			default:
+				break;
+		}
+	}
+cas_read_forward_exit:
+	return offset;
+}
+
+
+void core1_entry() {
+	FATFS fatfs;
+	FIL fil;
+	UINT bytes_read;
+	while(true) {
+		for(int i=0; i<5; i++) {
+			if(!mounts[i].mounted || mounts[i].status)
+				continue;
+			if(!i) {
+				if(f_mount(&fatfs, "", 1) != FR_OK)
+					break;
+				mounts[i].status = -1;
+				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+					cas_size = f_size(&fil);
+					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_signature) {
+						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
+					}
+					if(mounts[i].status == -1) {
+						mounts[i].mounted = false;
+						led.set_rgb(255,0,0);
+					}else{
+						led.set_rgb(0,255,0);
+					}
+					led.set_brightness(25);
+					f_close(&fil);
+				}
+				f_mount(0, "", 1);
+			}else {
+				break; // TODO skip disks for now
+			}
+		}
+		if(mounts[0].mounted && mounts[0].status && true) { // Motor pin check, motor can be real C: or turbo pin depending on the turbo system
+			FSIZE_t offset = mounts[0].status;
+			FSIZE_t to_read = 0;
+			if(offset < cas_size && f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK && f_lseek(&fil, offset) == FR_OK) {
+				if(pwm_block_index == cas_header.chunk_length) {
+					offset = cas_read_forward(&fil, offset);
+				}
+				to_read = std::min(cas_header.chunk_length-pwm_block_index, 128*pwm_block_multiple);
+				if(f_read(&fil, sector_buffer, to_read, &bytes_read) == FR_OK && bytes_read == to_read) {
+					offset += to_read;
+					pwm_block_index += to_read;
+				}
+				mounts[0].status = offset;
+				f_close(&fil);
+				f_mount(0, "", 1);
+			}else{
+				led.set_rgb(0,0,255);
+				mounts[0].status = 0;
+				mounts[0].mounted = false;
+			}
+			if(pwm_silence_duration) {
+				sleep_ms(pwm_silence_duration);
+				pwm_silence_duration = 0;
+			}
+			int i=0;
+			int bs, be, bd;
+			uint8_t b;
+			uint16_t ld;
+			while(i < to_read) {
+				switch(cas_header.signature) {
+					case cas_header_pwmc:
+						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
+						for(uint16_t j=0; j<ld; j++) {
+							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
+							sleep_us(sector_buffer[i]*pwm_sample_duration);
+							pwm_bit ^= 1;
+							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
+							sleep_us(sector_buffer[i]*pwm_sample_duration);
+							pwm_bit ^= 1;
+						}
+						break;
+					case cas_header_pwmd:
+						b = sector_buffer[i];
+						bs = 0; be=8; bd=1;
+						if (pwm_bit_order) {
+							bs=7; be=-1; bd=-1;
+						}
+						for(int j=bs; j!=be; j += bd) {
+							uint8_t d = (b >> j) & 0x1 ? cas_header.aux2 : cas_header.aux1;
+							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
+							sleep_us(d*pwm_sample_duration);
+							pwm_bit ^= 1;
+							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
+							sleep_us(d*pwm_sample_duration);
+							pwm_bit ^= 1;
+						}
+						break;
+					case cas_header_pwml:
+						ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
+						led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
+						sleep_us(ld*pwm_sample_duration);
+						pwm_bit ^= 1;
+						break;
+					default:
+						break;
+				}
+				i += pwm_block_multiple;
+			}
+
+			// pwms pwmc pwmd pwml
+			// can be either at the beginning of pwm block, or in the middle of the pwmd block
+			// pwm_data_block_size, pwm_data_block_index, buffer_index
+			// if(pwm_data_block_index == pwm_data_block_size) read new header
+			// if data block: init index 1 and 2 to 0, data block size
+			// if buffer_index == max read next buffer block, set buffer index to 0
+			// buffer_index not really needed?
+
+		}
+		tight_loop_contents();
+	}
+}
 
 typedef struct {
 	std::string *str;
@@ -684,10 +904,11 @@ void get_file(file_type t, int file_entry_index) {
 						break;
 					} else {
 						mounts[file_entry_index].mounted = true;
-						strcpy(mounts[file_entry_index].mount_path, &curr_path[0]);
-						strcpy(&(mounts[file_entry_index].mount_path[i]), f);
+						mounts[file_entry_index].status = 0;
+						strcpy((char *)mounts[file_entry_index].mount_path, &curr_path[0]);
+						strcpy((char *)&(mounts[file_entry_index].mount_path[i]), f);
 						i = 0;
-						int si = ft == file_type::disk ? 3 : 2;
+						int si = (ft == file_type::disk || ft == file_type::boot) ? 3 : 2;
 						while(i<12) {
 							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
 							i++;
@@ -746,6 +967,7 @@ int main() {
 	}while(boot_time <= usb_boot_delay);
 
 	tud_mount_cb();
+	multicore_launch_core1(core1_entry);
 	update_main_menu();
 
 	while(true) {
@@ -772,8 +994,10 @@ int main() {
 				if(mounts[d].mounted) {
 					mounts[d].mounted = false;
 				}else{
-					if(mounts[d].mount_path[0])
+					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
+						mounts[d].status = 0;
+					}
 				}
 				update_main_menu();
 			}
