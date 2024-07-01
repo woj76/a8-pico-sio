@@ -21,6 +21,7 @@
 #include <cstdlib>
 
 #include "pico/multicore.h"
+#include "pico/util/queue.h"
 #include "pico/time.h"
 #include "tusb.h"
 #include "fatfs_disk.h"
@@ -63,7 +64,7 @@ uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
 Point text_location(str_x(str_press_a_4.length()), str_y(5)-4*font_scale);
 
-RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 0);
+RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
 
 Button
 	button_a(PicoDisplay2::A),
@@ -260,7 +261,7 @@ bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
 	switch(ft) {
 		case file_type::casette:
-			return strcasecmp(&filename[i], "CAS") == 0 || strcasecmp(&filename[i], "WAV") == 0;
+			return strcasecmp(&filename[i], "CAS") == 0;
 		case file_type::boot:
 		case file_type::disk:
 			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || (ft == file_type::boot ? strcasecmp(&filename[i], "XEX") == 0 : 0);
@@ -361,6 +362,8 @@ const file_type menu_to_type[] = {
 	file_type::none
 };
 
+// TODO which of these actually need to be volatile?
+
 typedef struct {
 	std::string *str;
 	volatile char *mount_path;
@@ -405,13 +408,20 @@ volatile mounts_type mounts[] = {
   //   if this is normal C:, set the baud rate first if it is a regular data block, then revert to the old one
 
   // otherwise, check if command line low and serial read waiting, act accordingly
-
-
 */
+
+queue_t pwm_queue;
+
+typedef struct __attribute__((__packed__)) {
+	uint8_t bit_value;
+	uint16_t delay;
+} pwm_element_type;
+
+const int pwm_queue_size = 256;
 
 char sector_buffer[512];
 
-const uint32_t cas_header_signature = 0x494A5546; // FUJI in reverse
+const uint32_t cas_header_FUJI = 0x494A5546;
 const uint32_t cas_header_pwms = 0x736D7770;
 const uint32_t cas_header_pwmc = 0x636D7770;
 const uint32_t cas_header_pwmd = 0x646D7770;
@@ -425,11 +435,11 @@ typedef struct __attribute__((__packed__)) {
 } cas_header_type;
 
 cas_header_type cas_header;
-FSIZE_t cas_size;
-uint8_t pwm_bit_order; // 0 - LSB first, 1 MSB first
-uint8_t pwm_bit; // next bit to transmit
+volatile FSIZE_t cas_size;
+uint8_t pwm_bit_order;
+uint8_t pwm_bit;
 uint16_t pwm_sample_duration; // in us
-uint16_t pwm_silence_duration;
+uint16_t pwm_silence_duration; // in ms
 uint16_t pwm_block_index;
 uint16_t pwm_block_multiple;
 
@@ -452,9 +462,9 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 				pwm_bit_order = (cas_header.aux1 >> 2) & 0x1;
 				cas_header.aux1 &= 0x3;
 				if(cas_header.aux1 == 0b01)
-					pwm_bit = 0;
-				else if(cas_header.aux1 == 0b10)
 					pwm_bit = 1;
+				else if(cas_header.aux1 == 0b10)
+					pwm_bit = 0;
 				else {
 					offset = -1;
 					goto cas_read_forward_exit;
@@ -464,7 +474,7 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 					goto cas_read_forward_exit;
 				}
 				offset += bytes_read;
-				pwm_sample_duration = (500000+pwm_sample_duration/2)/pwm_sample_duration;
+				pwm_sample_duration = 500000/pwm_sample_duration; // Seems to also work with +1
 				break;
 			case cas_header_pwmc:
 				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
@@ -486,22 +496,44 @@ cas_read_forward_exit:
 	return offset;
 }
 
+const uint t2000_motor_pin = 2;
+const uint t2000_data_pin = 3; // LED is 25 for testing
+
+bool fire_t2000_pin(struct repeating_timer *pwm_timer) {
+	pwm_element_type e;
+	if(!gpio_get(t2000_motor_pin) && queue_try_remove(&pwm_queue, &e)){
+		pwm_timer->delay_us = -e.delay;
+		gpio_put(t2000_data_pin, e.bit_value);
+	} else {
+		pwm_timer->delay_us = 1000; // see in 1ms if something changed?
+	}
+	//gpio_put(t2000_data_pin, pwm_bit);
+	//sleep_us(t);
+	//pwm_bit ^= 1;
+	return true;
+}
 
 void core1_entry() {
 	FATFS fatfs;
 	FIL fil;
 	UINT bytes_read;
+	gpio_init(t2000_data_pin); gpio_set_dir(t2000_data_pin, GPIO_OUT); gpio_put(t2000_data_pin, 0);
+	gpio_init(t2000_motor_pin); gpio_set_dir(t2000_motor_pin, GPIO_IN); gpio_pull_up(t2000_motor_pin);
+	struct repeating_timer pwm_timer;
+	add_repeating_timer_us(1000, fire_t2000_pin, NULL, &pwm_timer);
 	while(true) {
 		for(int i=0; i<5; i++) {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(!i) {
+				queue_free(&pwm_queue);
+				queue_init(&pwm_queue, sizeof(pwm_element_type), pwm_queue_size);
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				mounts[i].status = -1;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 					cas_size = f_size(&fil);
-					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_signature) {
+					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI) {
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
 					}
 					if(mounts[i].status == -1) {
@@ -510,7 +542,6 @@ void core1_entry() {
 					}else{
 						led.set_rgb(0,255,0);
 					}
-					led.set_brightness(25);
 					f_close(&fil);
 				}
 				f_mount(0, "", 1);
@@ -518,14 +549,19 @@ void core1_entry() {
 				break; // TODO skip disks for now
 			}
 		}
-		if(mounts[0].mounted && mounts[0].status && true) { // Motor pin check, motor can be real C: or turbo pin depending on the turbo system
+		if(gpio_get(t2000_motor_pin)) {
+			led.set_rgb(255,0,0);
+		}else{
+			led.set_rgb(0,0,255);
+		}
+		if(mounts[0].mounted && mounts[0].status && !gpio_get(t2000_motor_pin)) { // TODO Motor pin check, motor can be real C: or turbo pin depending on the turbo system
 			FSIZE_t offset = mounts[0].status;
 			FSIZE_t to_read = 0;
 			if(offset < cas_size && f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK && f_lseek(&fil, offset) == FR_OK) {
 				if(pwm_block_index == cas_header.chunk_length) {
 					offset = cas_read_forward(&fil, offset);
 				}
-				to_read = std::min(cas_header.chunk_length-pwm_block_index, 128*pwm_block_multiple);
+				to_read = std::min(cas_header.chunk_length-pwm_block_index, 128*pwm_block_multiple); // TODO increase 128 to 132 for real CAS
 				if(f_read(&fil, sector_buffer, to_read, &bytes_read) == FR_OK && bytes_read == to_read) {
 					offset += to_read;
 					pwm_block_index += to_read;
@@ -538,62 +574,67 @@ void core1_entry() {
 				mounts[0].status = 0;
 				mounts[0].mounted = false;
 			}
+			pwm_element_type e;
 			if(pwm_silence_duration) {
-				sleep_ms(pwm_silence_duration);
+				// sleep_ms(pwm_silence_duration);
+				e.bit_value = 0;
+				e.delay = pwm_silence_duration*1000;
+				queue_add_blocking(&pwm_queue, &e);
 				pwm_silence_duration = 0;
 			}
 			int i=0;
 			int bs, be, bd;
 			uint8_t b;
 			uint16_t ld;
+			if(cas_header.signature == cas_header_pwml)
+				b = pwm_bit;
 			while(i < to_read) {
 				switch(cas_header.signature) {
 					case cas_header_pwmc:
 						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
 						for(uint16_t j=0; j<ld; j++) {
-							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
-							sleep_us(sector_buffer[i]*pwm_sample_duration);
-							pwm_bit ^= 1;
-							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
-							sleep_us(sector_buffer[i]*pwm_sample_duration);
-							pwm_bit ^= 1;
+							e.bit_value = pwm_bit;
+							e.delay = sector_buffer[i]*pwm_sample_duration;
+							queue_add_blocking(&pwm_queue, &e);
+							e.bit_value = pwm_bit ^ 1;
+							queue_add_blocking(&pwm_queue, &e);
+							//fire_t2000_pin(sector_buffer[i]*pwm_sample_duration);
+							//fire_t2000_pin(sector_buffer[i]*pwm_sample_duration);
 						}
 						break;
 					case cas_header_pwmd:
 						b = sector_buffer[i];
-						bs = 0; be=8; bd=1;
 						if (pwm_bit_order) {
 							bs=7; be=-1; bd=-1;
+						} else {
+							bs=0; be=8; bd=1;
 						}
 						for(int j=bs; j!=be; j += bd) {
 							uint8_t d = (b >> j) & 0x1 ? cas_header.aux2 : cas_header.aux1;
-							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
-							sleep_us(d*pwm_sample_duration);
-							pwm_bit ^= 1;
-							led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
-							sleep_us(d*pwm_sample_duration);
-							pwm_bit ^= 1;
+							e.bit_value = pwm_bit;
+							e.delay = d*pwm_sample_duration;
+							queue_add_blocking(&pwm_queue, &e);
+							e.bit_value = pwm_bit ^ 1;
+							queue_add_blocking(&pwm_queue, &e);
+							//fire_t2000_pin(d*pwm_sample_duration);
+							//fire_t2000_pin(d*pwm_sample_duration);
 						}
 						break;
 					case cas_header_pwml:
 						ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						led.set_rgb(255*pwm_bit,255*(1-pwm_bit),0);
-						sleep_us(ld*pwm_sample_duration);
+						e.bit_value = pwm_bit;
+						e.delay = ld*pwm_sample_duration;
+						queue_add_blocking(&pwm_queue, &e);
 						pwm_bit ^= 1;
+						// fire_t2000_pin(ld*pwm_sample_duration);
 						break;
 					default:
 						break;
 				}
 				i += pwm_block_multiple;
 			}
-
-			// pwms pwmc pwmd pwml
-			// can be either at the beginning of pwm block, or in the middle of the pwmd block
-			// pwm_data_block_size, pwm_data_block_index, buffer_index
-			// if(pwm_data_block_index == pwm_data_block_size) read new header
-			// if data block: init index 1 and 2 to 0, data block size
-			// if buffer_index == max read next buffer block, set buffer index to 0
-			// buffer_index not really needed?
+			if(cas_header.signature == cas_header_pwml)
+				pwm_bit = b;
 
 		}
 		tight_loop_contents();
@@ -934,6 +975,7 @@ get_file_exit:
 
 int main() {
 //	stdio_init_all();
+	set_sys_clock_khz(250000, true);
 	led.set_rgb(0, 0, 0);
 	st7789.set_backlight(255);
 
