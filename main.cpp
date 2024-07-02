@@ -175,37 +175,33 @@ struct ProgressBar {
 	const bool with_range;
 	const Rect clear_rect;
 	const uint16_t width;
-	uint16_t prev_step;
 	Rect progress_rect;
 	int dir;
-	ProgressBar(uint16_t w, int y, bool r, uint16_t s=0) :
-			progress_rect((st7789.width - w)/2,y+4*font_scale,r ? s : 8*8*font_scale ,8*font_scale),
+	ProgressBar(uint16_t w, int y, bool r) :
+			progress_rect((st7789.width - w)/2,y+4*font_scale,r ? 0 : 8*8*font_scale ,8*font_scale),
 			clear_rect((st7789.width - w)/2,y+4*font_scale,w,8*font_scale),
 			with_range(r),
 			dir(r ? 0 : 4),
-			prev_step(s),
 			width(w) {
-		init();
 	}
 	void init() {
-		Rect rect((st7789.width - width - 8*font_scale)/2, progress_rect.y-8*font_scale, width+8*font_scale, 24*font_scale);
+		Rect rect((st7789.width - width - 2*8*font_scale)/2, progress_rect.y-8*font_scale, width+2*8*font_scale, 24*font_scale);
 		if(!with_range) {
 			graphics.set_pen(BG);
 			graphics.rectangle(rect);
 		}
-		rect.y += 4*font_scale;
-		rect.h -= 8*font_scale;
+		rect.deflate(4*font_scale);
 		graphics.set_pen(WHITE); graphics.rectangle(rect);
 		rect.deflate(2*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(rect);
-		if(with_range && prev_step)
-			update(prev_step);
+		if(with_range && progress_rect.w)
+			update(progress_rect.w);
 	}
 	void update(uint16_t step) {
 		if(!with_range)
 			return;
-		if (step > width) step = width;
-		if(step < prev_step) {
+		if(step > width) step = width;
+		if(step < progress_rect.w) {
 			graphics.set_pen(BG);
 			graphics.rectangle(progress_rect);
 		}
@@ -216,7 +212,8 @@ struct ProgressBar {
 	void update() {
 		if(with_range)
 			return;
-		graphics.set_pen(BG); graphics.rectangle(clear_rect);
+		graphics.set_pen(BG);
+		graphics.rectangle(clear_rect);
 		if(dir > 0 && progress_rect.x + progress_rect.w == clear_rect.x + clear_rect.w) {
 			dir = -4;
 		}else if (dir < 0 && progress_rect.x == clear_rect.x){
@@ -228,10 +225,10 @@ struct ProgressBar {
 	}
 };
 
-ProgressBar *loading_pg;
+ProgressBar loading_pg(192,(6*8+4)*font_scale, false);
 
 bool repeating_timer_directory(struct repeating_timer *t) {
-	loading_pg->update();
+	loading_pg.update();
 	st7789.update(&graphics);
 	return true;
 }
@@ -360,17 +357,16 @@ std::string str_d4 = "D4:  <EMPTY>   ";
 const std::string str_rot_up = "Rotate Up";
 const std::string str_rot_down = "Rotate Down";
 std::string str_cas = "C:  <EMPTY>   ";
-const std::string str_rewind = "Rewind";
+// const std::string str_rewind = "Rewind";
 
-const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
+const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0};
 const file_type menu_to_type[] = {
 	file_type::none,
 	// TODO With e.g. U1MB theoretically all D: are bootable, but then the (kboot?) XEX loader
 	// needs to account for the drive number.
 	file_type::boot, file_type::disk, file_type::disk, file_type::disk,
 	file_type::none, file_type::none,
-	file_type::casette,
-	file_type::none
+	file_type::casette
 };
 
 // TODO which of these actually need to be volatile?
@@ -382,9 +378,7 @@ typedef struct {
 	/* status:
 		if 0 the file header needs to be processed, if this fails:
 			set mounted to false
-			set status to -1
 			mark on screen with a suitable icon
-			TODO main screen needs to check for mounts regularly to change button icons
 		opening a new file / injecting sets status to 0
 		for C: current index to the file being read to use with f_lseek
 		for Dx: 0 yet to be opened, >0 sector size of the mounted ATR and ATR header verified
@@ -409,13 +403,10 @@ volatile mounts_type mounts[] = {
 
 /*
   // Init serial port to 19200 baud
-  // Blocking lock for FS access
-  // FSIZE_t (DWORD)
-  // while(true)
+  // Blocking lock for FS access?
   // go through mounts that are true and status 0: try to validate the file and set status accordingly
 
   // if motor on and cas mounted: process next "block" for cas: in buffered increments process one complete data block,
-  // pause of motor check once so often
   //   if this is normal C:, set the baud rate first if it is a regular data block, then revert to the old one
 
   // otherwise, check if command line low and serial read waiting, act accordingly
@@ -425,7 +416,7 @@ queue_t pwm_queue;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t bit_value;
-	uint16_t delay;
+	int16_t delay;
 } pwm_element_type;
 
 const int pwm_queue_size = 256;
@@ -459,7 +450,7 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	UINT bytes_read;
 	while(true) {
 		if(f_read(fil, &cas_header, sizeof(cas_header_type), &bytes_read) != FR_OK || bytes_read != sizeof(cas_header_type)) {
-			offset = -1;
+			offset = 0;
 			goto cas_read_forward_exit;
 		}
 		offset += bytes_read;
@@ -467,7 +458,7 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 		switch(cas_header.signature) {
 			case cas_header_pwms:
 				if(cas_header.chunk_length != 2) {
-					offset = -1;
+					offset = 0;
 					goto cas_read_forward_exit;
 				}
 				pwm_bit_order = (cas_header.aux1 >> 2) & 0x1;
@@ -477,11 +468,11 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 				else if(cas_header.aux1 == 0b10)
 					pwm_bit = 0;
 				else {
-					offset = -1;
+					offset = 0;
 					goto cas_read_forward_exit;
 				}
 				if(f_read(fil, &pwm_sample_duration, sizeof(uint16_t), &bytes_read) != FR_OK || bytes_read != sizeof(uint16_t)) {
-					offset = -1;
+					offset = 0;
 					goto cas_read_forward_exit;
 				}
 				offset += bytes_read;
@@ -508,19 +499,15 @@ cas_read_forward_exit:
 }
 
 const uint t2000_motor_pin = 2;
-const uint t2000_data_pin = 3; // LED is 25 for testing
+const uint t2000_data_pin = 3; // LED=25 for testing
 
 bool fire_t2000_pin(struct repeating_timer *pwm_timer) {
-	pwm_element_type e;
-	if(!gpio_get(t2000_motor_pin) && queue_try_remove(&pwm_queue, &e)){
-		pwm_timer->delay_us = -e.delay;
+	pwm_element_type e = { .bit_value=0, .delay=-1000 };
+	if(!gpio_get(t2000_motor_pin)){
+		queue_try_remove(&pwm_queue, &e);
 		gpio_put(t2000_data_pin, e.bit_value);
-	} else {
-		pwm_timer->delay_us = 1000; // see in 1ms if something changed?
 	}
-	//gpio_put(t2000_data_pin, pwm_bit);
-	//sleep_us(t);
-	//pwm_bit ^= 1;
+	pwm_timer->delay_us = -e.delay;
 	return true;
 }
 
@@ -541,13 +528,12 @@ void core1_entry() {
 				queue_init(&pwm_queue, sizeof(pwm_element_type), pwm_queue_size);
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
-				mounts[i].status = -1;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 					cas_size = f_size(&fil);
 					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI) {
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
 					}
-					if(mounts[i].status == -1) {
+					if(!mounts[i].status) {
 						mounts[i].mounted = false;
 						led.set_rgb(255,0,0);
 					}else{
@@ -560,34 +546,45 @@ void core1_entry() {
 				break; // TODO skip disks for now
 			}
 		}
-		if(gpio_get(t2000_motor_pin)) {
-			led.set_rgb(255,0,0);
-		}else{
-			led.set_rgb(0,0,255);
-		}
-		if(mounts[0].mounted && mounts[0].status && !gpio_get(t2000_motor_pin)) { // TODO Motor pin check, motor can be real C: or turbo pin depending on the turbo system
-			FSIZE_t offset = mounts[0].status;
+
+		FSIZE_t offset = mounts[0].status;
+		if(mounts[0].mounted && offset && offset < cas_size && !gpio_get(t2000_motor_pin)) { // TODO Motor pin check, motor can be real C: or turbo pin depending on the turbo system
 			FSIZE_t to_read = 0;
-			if(offset < cas_size && f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK && f_lseek(&fil, offset) == FR_OK) {
+			FRESULT f_stat;
+			do {
+				if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+					break;
+				if((f_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
+					break;
+				if((f_stat = f_lseek(&fil, offset)) != FR_OK)
+					break;
 				if(pwm_block_index == cas_header.chunk_length) {
 					offset = cas_read_forward(&fil, offset);
+					if(offset == -1) {
+						f_stat = FR_INT_ERR;
+						break;
+					}
 				}
 				to_read = std::min(cas_header.chunk_length-pwm_block_index, 128*pwm_block_multiple); // TODO increase 128 to 132 for real CAS
-				if(f_read(&fil, sector_buffer, to_read, &bytes_read) == FR_OK && bytes_read == to_read) {
-					offset += to_read;
-					pwm_block_index += to_read;
+				if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+					break;
+				if(bytes_read != to_read) {
+					f_stat = FR_INT_ERR;
+					break;
 				}
+				offset += to_read;
+				pwm_block_index += to_read;
+			}while(false);
+			f_close(&fil);
+			f_mount(0, "", 1);
+			if(f_stat == FR_OK) {
 				mounts[0].status = offset;
-				f_close(&fil);
-				f_mount(0, "", 1);
-			}else{
-				led.set_rgb(0,0,255);
-				mounts[0].status = 0;
+			} else {
 				mounts[0].mounted = false;
+				continue;
 			}
 			pwm_element_type e;
 			if(pwm_silence_duration) {
-				// sleep_ms(pwm_silence_duration);
 				e.bit_value = 0;
 				e.delay = pwm_silence_duration*1000;
 				queue_add_blocking(&pwm_queue, &e);
@@ -609,8 +606,6 @@ void core1_entry() {
 							queue_add_blocking(&pwm_queue, &e);
 							e.bit_value = pwm_bit ^ 1;
 							queue_add_blocking(&pwm_queue, &e);
-							//fire_t2000_pin(sector_buffer[i]*pwm_sample_duration);
-							//fire_t2000_pin(sector_buffer[i]*pwm_sample_duration);
 						}
 						break;
 					case cas_header_pwmd:
@@ -627,8 +622,6 @@ void core1_entry() {
 							queue_add_blocking(&pwm_queue, &e);
 							e.bit_value = pwm_bit ^ 1;
 							queue_add_blocking(&pwm_queue, &e);
-							//fire_t2000_pin(d*pwm_sample_duration);
-							//fire_t2000_pin(d*pwm_sample_duration);
 						}
 						break;
 					case cas_header_pwml:
@@ -637,7 +630,6 @@ void core1_entry() {
 						e.delay = ld*pwm_sample_duration;
 						queue_add_blocking(&pwm_queue, &e);
 						pwm_bit ^= 1;
-						// fire_t2000_pin(ld*pwm_sample_duration);
 						break;
 					default:
 						break;
@@ -646,9 +638,7 @@ void core1_entry() {
 			}
 			if(cas_header.signature == cas_header_pwml)
 				pwm_bit = b;
-
 		}
-		tight_loop_contents();
 	}
 }
 
@@ -666,10 +656,10 @@ const menu_entry menu_entries[] = {
 	{.str = &str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
 	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
 	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
-	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
-	{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
+	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()}
+	//{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
 };
-const size_t menu_entry_size = 9;
+const size_t menu_entry_size = 8;
 
 typedef struct {
 	std::string *str;
@@ -708,14 +698,31 @@ void update_menu_entry(int i) {
 	print_text(*(menu_entries[i].str), i==cursor_position ? menu_entries[i].wd : 0);
 }
 
+const uint16_t cas_pg_width = 208;
+ProgressBar cas_pg(cas_pg_width,(11*8+2)*font_scale, true);
+
+void update_main_menu_buttons() {
+	int m = menu_to_mount[cursor_position];
+	if(m != -1) {
+		if(mounts[m].mounted)
+			main_buttons[0].str = &char_eject;
+		else if(mounts[m].mount_path[0])
+			main_buttons[0].str = &char_inject;
+		else
+			main_buttons[0].str = &char_empty;
+	}else{
+		main_buttons[0].str = &char_empty;
+	}
+	update_buttons(main_buttons, cursor_prev == -1 ? main_buttons_size : 1);
+}
+
 void update_main_menu() {
 	if(cursor_prev == -1) {
 		graphics.set_pen(BG);
 		graphics.clear();
 		for(int i=0; i<menu_entry_size;i++)
 			update_menu_entry(i);
-		// TODO this needs to be global
-		// ProgressBar cas_pg(208,(11*8+2)*font_scale, true, 15);
+		cas_pg.init();
 	}else{
 		int i = cursor_prev;
 		while(true) {
@@ -729,20 +736,8 @@ void update_main_menu() {
 		}
 
 	}
-	int m = menu_to_mount[cursor_position];
-	if(m != -1) {
-		if(mounts[m].mounted)
-			main_buttons[0].str = &char_eject;
-		else if(mounts[m].mount_path[0])
-			main_buttons[0].str = &char_inject;
-		else
-			main_buttons[0].str = &char_empty;
-	}else{
-		main_buttons[0].str = &char_empty;
-	}
-	update_buttons(main_buttons, cursor_prev == -1 ? main_buttons_size : 1);
-	st7789.update(&graphics);
 }
+
 
 std::string str_fit(13,' ');
 
@@ -849,10 +844,9 @@ void get_file(file_type t, int file_entry_index) {
 	int top_index = dir_browse_stack[dir_browse_stack_index+1];
 
 	main_buttons[0].str = &char_left;
-	graphics.set_pen(BG); graphics.clear();
 
 	while(true) {
-		loading_pg = new ProgressBar(192,(6*8+4)*font_scale, false);
+		loading_pg.init();
 
 		struct repeating_timer timer;
 		add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
@@ -864,10 +858,9 @@ void get_file(file_type t, int file_entry_index) {
 		}
 		// sleep_ms(5000); // For testing
 		cancel_repeating_timer(&timer);
-		delete loading_pg;
 
+		graphics.set_pen(BG); graphics.clear();
 		if(!r) {
-			graphics.set_pen(BG); graphics.clear();
 			text_location.x = str_x(str_no_media.length());
 			text_location.y = 7*8*font_scale;
 			print_text(str_no_media, str_no_media.length());
@@ -984,8 +977,6 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
-const uint16_t cas_pg_width = 208;
-
 int main() {
 //	stdio_init_all();
 	set_sys_clock_khz(250000, true);
@@ -1010,11 +1001,11 @@ int main() {
 		usb_drive();
 
 	ProgressBar pg(200, text_location.y+16*font_scale, true);
+	pg.init();
 	st7789.update(&graphics);
 	uint32_t boot_time;
 	do {
 		boot_time = to_ms_since_boot(get_absolute_time());
-
 		pg.update(200*boot_time/usb_boot_delay);
 		st7789.update(&graphics);
 		if(button_a.read())
@@ -1025,8 +1016,8 @@ int main() {
 	tud_mount_cb();
 	multicore_launch_core1(core1_entry);
 	update_main_menu();
-	ProgressBar cas_pg(cas_pg_width,(11*8+2)*font_scale, true, 0);
-	FSIZE_t last_cas_offset = 0;
+	st7789.update(&graphics);
+	FSIZE_t last_cas_offset = -1;
 
 	while(true) {
 		int d = menu_to_mount[cursor_position];
@@ -1041,11 +1032,10 @@ int main() {
 		}else if(button_a.read()){
 			if(d == -1) {
 				// React to:
-				// config, rotate up, rotate down, rewind
+				// config, rotate up, rotate down
 			}else{
 				get_file(menu_to_type[cursor_position], d);
 				update_main_menu();
-				cas_pg.init();
 			}
 
 		}else if(button_b.read()) {
@@ -1056,18 +1046,20 @@ int main() {
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
 						mounts[d].status = 0;
+						if(!d)
+							last_cas_offset = -1;
 					}
 				}
-				update_main_menu();
 			}
 		}
 		FSIZE_t s = mounts[0].status;
-		if(cursor_prev == -1 || (mounts[0].mounted && s >= 0 && s != last_cas_offset)) {
-			if(s == -1) s=0;
+		if(cursor_prev == -1 || (mounts[0].mounted && s != last_cas_offset)) {
+			if(s == -1) s = 0;
 			cas_pg.update(cas_pg_width*s/cas_size);
 			last_cas_offset = s;
-			st7789.update(&graphics);
 		}
+		update_main_menu_buttons();
+		st7789.update(&graphics);
 		sleep_ms(20);
 	}
 	return 0;
