@@ -172,17 +172,24 @@ void usb_drive() {
 }
 
 struct ProgressBar {
-	int range;
-	Rect progress_rect;
+	const bool with_range;
 	const Rect clear_rect;
-	const uint32_t progress_range;
-	ProgressBar(const Point &p, int r, int s=0) :
-			range(!r ? 1 : r),
-			progress_rect(p.x+4*font_scale,p.y+4*font_scale,r ? s : 8*8*font_scale ,8*font_scale),
-			clear_rect(p.x+4*font_scale,p.y+4*font_scale,st7789.width-2*p.x-8*font_scale,8*font_scale),
-			progress_range(st7789.width-2*p.x-8*font_scale) {
-		Rect rect(p.x, p.y-4*font_scale, progress_range+8*font_scale, 24*font_scale);
-		if(!r) {
+	const uint16_t width;
+	uint16_t prev_step;
+	Rect progress_rect;
+	int dir;
+	ProgressBar(uint16_t w, int y, bool r, uint16_t s=0) :
+			progress_rect((st7789.width - w)/2,y+4*font_scale,r ? s : 8*8*font_scale ,8*font_scale),
+			clear_rect((st7789.width - w)/2,y+4*font_scale,w,8*font_scale),
+			with_range(r),
+			dir(r ? 0 : 4),
+			prev_step(s),
+			width(w) {
+		init();
+	}
+	void init() {
+		Rect rect((st7789.width - width - 8*font_scale)/2, progress_rect.y-8*font_scale, width+8*font_scale, 24*font_scale);
+		if(!with_range) {
 			graphics.set_pen(BG);
 			graphics.rectangle(rect);
 		}
@@ -191,27 +198,31 @@ struct ProgressBar {
 		graphics.set_pen(WHITE); graphics.rectangle(rect);
 		rect.deflate(2*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(rect);
-		if(r && s)
-			update(s);
+		if(with_range && prev_step)
+			update(prev_step);
 	}
-	void update(uint32_t step) {
-		if(range < 2)
+	void update(uint16_t step) {
+		if(!with_range)
 			return;
-		if (step > range) step = range;
-		progress_rect.w = step*progress_range/range;
+		if (step > width) step = width;
+		if(step < prev_step) {
+			graphics.set_pen(BG);
+			graphics.rectangle(progress_rect);
+		}
+		progress_rect.w = step;
 		graphics.set_pen(WHITE);
 		graphics.rectangle(progress_rect);
 	}
 	void update() {
-		if(range > 1)
+		if(with_range)
 			return;
 		graphics.set_pen(BG); graphics.rectangle(clear_rect);
-		if(range > 0 && progress_rect.x + progress_rect.w == clear_rect.x + clear_rect.w) {
-			range = -1;
-		}else if (range < 0 && progress_rect.x == clear_rect.x){
-			range = 1;
+		if(dir > 0 && progress_rect.x + progress_rect.w == clear_rect.x + clear_rect.w) {
+			dir = -4;
+		}else if (dir < 0 && progress_rect.x == clear_rect.x){
+			dir = 4;
 		}
-		progress_rect.x += range;
+		progress_rect.x += dir;
 		graphics.set_pen(WHITE);
 		graphics.rectangle(progress_rect);
 	}
@@ -655,7 +666,7 @@ const menu_entry menu_entries[] = {
 	{.str = &str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
 	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
 	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
-	{.str = &str_cas,.x=4*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
+	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
 	{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
 };
 const size_t menu_entry_size = 9;
@@ -704,7 +715,7 @@ void update_main_menu() {
 		for(int i=0; i<menu_entry_size;i++)
 			update_menu_entry(i);
 		// TODO this needs to be global
-		ProgressBar cas_pg(Point(2*8*font_scale,(11*8+2)*font_scale), 100, 15);
+		// ProgressBar cas_pg(208,(11*8+2)*font_scale, true, 15);
 	}else{
 		int i = cursor_prev;
 		while(true) {
@@ -841,7 +852,7 @@ void get_file(file_type t, int file_entry_index) {
 	graphics.set_pen(BG); graphics.clear();
 
 	while(true) {
-		loading_pg = new ProgressBar(Point(2*8*font_scale,(6*8+4)*font_scale), 0);
+		loading_pg = new ProgressBar(192,(6*8+4)*font_scale, false);
 
 		struct repeating_timer timer;
 		add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
@@ -851,7 +862,7 @@ void get_file(file_type t, int file_entry_index) {
 			curr_path[0] = 0;
 			r = read_directory();
 		}
-		// sleep_ms(1000); For testing
+		// sleep_ms(5000); // For testing
 		cancel_repeating_timer(&timer);
 		delete loading_pg;
 
@@ -973,6 +984,8 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
+const uint16_t cas_pg_width = 208;
+
 int main() {
 //	stdio_init_all();
 	set_sys_clock_khz(250000, true);
@@ -996,12 +1009,13 @@ int main() {
 	}else
 		usb_drive();
 
-	ProgressBar pg(Point(text_location.x,text_location.y+16*font_scale), usb_boot_delay);
+	ProgressBar pg(200, text_location.y+16*font_scale, true);
 	st7789.update(&graphics);
 	uint32_t boot_time;
 	do {
 		boot_time = to_ms_since_boot(get_absolute_time());
-		pg.update(boot_time);
+
+		pg.update(200*boot_time/usb_boot_delay);
 		st7789.update(&graphics);
 		if(button_a.read())
 			usb_drive();
@@ -1011,6 +1025,8 @@ int main() {
 	tud_mount_cb();
 	multicore_launch_core1(core1_entry);
 	update_main_menu();
+	ProgressBar cas_pg(cas_pg_width,(11*8+2)*font_scale, true, 0);
+	FSIZE_t last_cas_offset = 0;
 
 	while(true) {
 		int d = menu_to_mount[cursor_position];
@@ -1029,6 +1045,7 @@ int main() {
 			}else{
 				get_file(menu_to_type[cursor_position], d);
 				update_main_menu();
+				cas_pg.init();
 			}
 
 		}else if(button_b.read()) {
@@ -1043,6 +1060,13 @@ int main() {
 				}
 				update_main_menu();
 			}
+		}
+		FSIZE_t s = mounts[0].status;
+		if(cursor_prev == -1 || (mounts[0].mounted && s >= 0 && s != last_cas_offset)) {
+			if(s == -1) s=0;
+			cas_pg.update(cas_pg_width*s/cas_size);
+			last_cas_offset = s;
+			st7789.update(&graphics);
 		}
 		sleep_ms(20);
 	}
