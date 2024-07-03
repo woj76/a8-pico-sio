@@ -45,6 +45,6 @@ target_include_directories(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/fatfs
 )
 
-target_link_libraries(a8_pico_sio PUBLIC pico_stdlib pico_multicore hardware_flash tinyusb_device hardware_spi hardware_pwm hardware_dma rgbled button pico_graphics pico_display_2 st7789)
+target_link_libraries(a8_pico_sio PUBLIC pico_stdlib pico_multicore hardware_uart hardware_flash tinyusb_device hardware_spi hardware_pwm hardware_dma rgbled button pico_graphics pico_display_2 st7789)
 
 pico_add_extra_outputs(a8_pico_sio)
