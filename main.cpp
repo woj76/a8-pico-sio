@@ -53,6 +53,8 @@ std::string char_left = "#";
 std::string char_right = "$";
 std::string char_inject = "%";
 std::string char_eject = "&";
+std::string char_play = "'";
+std::string char_stop = "(";
 
 using namespace pimoroni;
 
@@ -705,9 +707,9 @@ void update_main_menu_buttons() {
 	int m = menu_to_mount[cursor_position];
 	if(m != -1) {
 		if(mounts[m].mounted)
-			main_buttons[0].str = &char_eject;
+			main_buttons[0].str = m ? &char_eject : &char_stop;
 		else if(mounts[m].mount_path[0])
-			main_buttons[0].str = &char_inject;
+			main_buttons[0].str = m ? &char_inject : &char_play;
 		else
 			main_buttons[0].str = &char_empty;
 	}else{
