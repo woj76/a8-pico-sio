@@ -441,8 +441,10 @@ const uint32_t cas_header_pwml = 0x6C6D7770;
 typedef struct __attribute__((__packed__)) {
 	uint32_t signature;
 	uint16_t chunk_length;
-	uint8_t aux1; // TODO make this a union
-	uint8_t aux2;
+	union {
+		struct { uint8_t aux1; uint8_t aux2; } aux_b;
+		uint16_t aux_w;
+	} aux;
 } cas_header_type;
 
 cas_header_type cas_header;
@@ -486,7 +488,8 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 					goto cas_read_forward_exit;
 				}
 				// cas_baudrate = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
-				pwm_sample_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				//pwm_sample_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_sample_duration = cas_header.aux.aux_w;
 				pwm_sample_duration = 1000000/pwm_sample_duration;
 				//pwm_sample_duration = 1000000/pwm_sample_duration-3;
 				// pwm_sample_duration = 988467/pwm_sample_duration;
@@ -494,12 +497,14 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 				break;
 			case cas_header_data:
 				cas_block_turbo = false;
-				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 1;
 				goto cas_read_forward_exit;
 			case cas_header_fsk:
 				cas_block_turbo = false;
-				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 2;
 				cas_fsk_bit = 0;
 				goto cas_read_forward_exit;
@@ -508,11 +513,11 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 					offset = 0;
 					goto cas_read_forward_exit;
 				}
-				pwm_bit_order = (cas_header.aux1 >> 2) & 0x1;
-				cas_header.aux1 &= 0x3;
-				if(cas_header.aux1 == 0b01)
+				pwm_bit_order = (cas_header.aux.aux_b.aux1 >> 2) & 0x1;
+				cas_header.aux.aux_b.aux1 &= 0x3;
+				if(cas_header.aux.aux_b.aux1 == 0b01)
 					pwm_bit = 1;
-				else if(cas_header.aux1 == 0b10)
+				else if(cas_header.aux.aux_b.aux1 == 0b10)
 					pwm_bit = 0;
 				else {
 					offset = 0;
@@ -527,7 +532,8 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 				break;
 			case cas_header_pwmc:
 				cas_block_turbo = true;
-				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 3;
 				goto cas_read_forward_exit;
 			case cas_header_pwmd:
@@ -537,7 +543,8 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 				goto cas_read_forward_exit;
 			case cas_header_pwml:
 				cas_block_turbo = true;
-				pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
+				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 2;
 				goto cas_read_forward_exit;
 			default:
@@ -555,15 +562,14 @@ const uint turbo_data_pin = 3;
 const uint uart1_tx_pin = 4; // 3; // 25; // 4;
 const uint uart1_rx_pin = 5;
 
-#define piox pio0
-#define t_corr 4
-// 4 is sweet going down
-// 8 goes slightly up
-// 9 goes properly up
+const PIO cas_pio = pio0;
+const int t_corr=4;
+const int n_corr=3;
 
-void pio_enqueue(uint s, uint8_t b, uint32_t d) {
-	while(pio_sm_is_tx_fifo_full(piox, s) /* || gpio_get(turbo_motor_pin) */);
-	piox->txf[s] = (b | (d << 1));
+void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
+	while(pio_sm_is_tx_fifo_full(cas_pio, sm))
+		tight_loop_contents();
+	cas_pio->txf[sm] = (b | (d << 1));
 }
 
 void core1_entry() {
@@ -580,30 +586,30 @@ void core1_entry() {
 	//uart_set_fifo_enabled(uart1, true);
 	//uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 
-	uint pio_offset = pio_add_program(piox, &pin_io_program);
-	uint sm = pio_claim_unused_sm(piox, true);
-	pio_gpio_init(piox, uart1_tx_pin);
-	pio_sm_set_consecutive_pindirs(piox, sm, uart1_tx_pin, 1, true);
+	uint pio_offset = pio_add_program(cas_pio, &pin_io_program);
+	uint sm = pio_claim_unused_sm(cas_pio, true);
+	pio_gpio_init(cas_pio, uart1_tx_pin);
+	pio_sm_set_consecutive_pindirs(cas_pio, sm, uart1_tx_pin, 1, true);
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 	sm_config_set_clkdiv(&c, custom_sys_clock*1.0f);
 	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_shift(&c, true, false, 32);
-	pio_sm_init(piox, sm, pio_offset, &c);
-	pio_sm_set_enabled(piox, sm, true);
+	pio_sm_init(cas_pio, sm, pio_offset, &c);
+	pio_sm_set_enabled(cas_pio, sm, true);
 
-	uint sm_turbo = pio_claim_unused_sm(piox, true);
-	pio_gpio_init(piox, turbo_data_pin);
-	pio_sm_set_consecutive_pindirs(piox, sm_turbo, turbo_data_pin, 1, true);
+	uint sm_turbo = pio_claim_unused_sm(cas_pio, true);
+	pio_gpio_init(cas_pio, turbo_data_pin);
+	pio_sm_set_consecutive_pindirs(cas_pio, sm_turbo, turbo_data_pin, 1, true);
 	pio_sm_config c1 = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
 	sm_config_set_clkdiv(&c1, custom_sys_clock*1.0f);
 	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_pins(&c1, turbo_data_pin, 1);
 	sm_config_set_out_shift(&c1, true, false, 32);
-	pio_sm_init(piox, sm_turbo, pio_offset, &c1);
-	pio_sm_set_enabled(piox, sm_turbo, true);
+	pio_sm_init(cas_pio, sm_turbo, pio_offset, &c1);
+	pio_sm_set_enabled(cas_pio, sm_turbo, true);
 
 	// uart_set_baudrate(uart1, 600);
 	// uart_is_readable(uart1);
@@ -618,7 +624,7 @@ void core1_entry() {
 				continue;
 			if(!i) {
 				// TODO probably not necessary
-				// pio_sm_drain_tx_fifo(piox, sm);
+				// pio_sm_drain_tx_fifo(cas_pio, sm);
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
@@ -682,7 +688,7 @@ void core1_entry() {
 				if(cas_block_turbo)
 					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000-t_corr);
 				else
-					pio_enqueue(sm, 1, pwm_silence_duration*1000-3);
+					pio_enqueue(sm, 1, pwm_silence_duration*1000-n_corr);
 				pwm_silence_duration = 0;
 			}
 			int i=0;
@@ -697,7 +703,7 @@ void core1_entry() {
 						//while (!uart_is_writable(uart1));
 						//uart_get_hw(uart1)->dr = sector_buffer[i];
 						// e = 0 | (() << 1);
-						pio_enqueue(sm, 0, pwm_sample_duration-3);
+						pio_enqueue(sm, 0, pwm_sample_duration-n_corr);
 						//e.bit_value = 0;
 						//e.delay = pwm_sample_duration;
 						//queue_add_blocking(&pwm_queue, &e);
@@ -707,7 +713,7 @@ void core1_entry() {
 							//e.delay = pwm_sample_duration;
 							//queue_add_blocking(&pwm_queue, &e);
 							// e = ((b >> j) & 0x1) | ((pwm_sample_duration) << 1);
-							pio_enqueue(sm, (b >> j) & 0x1, pwm_sample_duration-3);
+							pio_enqueue(sm, (b >> j) & 0x1, pwm_sample_duration-n_corr);
 
 						}
 						// e.bit_value = 1;
@@ -715,7 +721,7 @@ void core1_entry() {
 						// queue_add_blocking(&pwm_queue, &e);
 						// e = 1 | ((pwm_sample_duration-3) << 1);
 						// pio_enqueue(e);
-						pio_enqueue(sm, 1, pwm_sample_duration-3);
+						pio_enqueue(sm, 1, pwm_sample_duration-n_corr);
 						break;
 					case cas_header_fsk:
 						ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
@@ -723,7 +729,7 @@ void core1_entry() {
 						//e.bit_value = cas_fsk_bit;
 						//queue_add_blocking(&pwm_queue, &e);
 						// e = cas_fsk_bit | ((100*ld-3) << 1);
-						pio_enqueue(sm, cas_fsk_bit, 100*ld-3);
+						pio_enqueue(sm, cas_fsk_bit, 100*ld-n_corr);
 						cas_fsk_bit ^= 1;
 						break;
 					case cas_header_pwmc:
@@ -746,7 +752,7 @@ void core1_entry() {
 							bs=0; be=8; bd=1;
 						}
 						for(int j=bs; j!=be; j += bd) {
-							uint8_t d = (b >> j) & 0x1 ? cas_header.aux2 : cas_header.aux1;
+							uint8_t d = (b >> j) & 0x1 ? cas_header.aux.aux_b.aux2 : cas_header.aux.aux_b.aux1;
 							pio_enqueue(sm_turbo, pwm_bit, d*pwm_sample_duration-t_corr);
 							pio_enqueue(sm_turbo, pwm_bit^1, d*pwm_sample_duration-t_corr);
 							//e.bit_value = pwm_bit;
@@ -770,7 +776,8 @@ void core1_entry() {
 				i += pwm_block_multiple;
 			}
 			if(pwm_block_index == cas_header.chunk_length) {
-				while(!pio_sm_is_tx_fifo_empty(piox, cas_block_turbo ? sm_turbo : sm));
+				while(!pio_sm_is_tx_fifo_empty(cas_pio, cas_block_turbo ? sm_turbo : sm))
+					tight_loop_contents();
 				// sleep_us(100);
 			}
 			//if(cas_header.signature == cas_header_fsk) {
@@ -1006,7 +1013,8 @@ void get_file(file_type t, int file_entry_index) {
 			print_text(str_no_media, str_no_media.length());
 			update_buttons(nomedia_buttons, nomedia_buttons_size);
 			st7789.update(&graphics);
-			while(!button_b.read());
+			while(!button_b.read())
+				tight_loop_contents();
 			dir_browse_stack_index = 0;
 			dir_browse_stack[0] = 0;
 			dir_browse_stack[1] = 0;
