@@ -683,9 +683,9 @@ void core1_entry() {
 			}
 			if(pwm_silence_duration) {
 				if(cas_block_turbo)
-					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000);
+					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000-t_corr);
 				else
-					pio_enqueue(sm, 1, pwm_silence_duration*1000);
+					pio_enqueue(sm, 1, pwm_silence_duration*1000-n_corr);
 				pwm_silence_duration = 0;
 			}
 			int i=0;
@@ -709,7 +709,7 @@ void core1_entry() {
 						ld = *(uint16_t *)&sector_buffer[i];
 						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
 						if(ld != 0) {
-							pio_enqueue(sm, cas_fsk_bit, 100*ld);
+							pio_enqueue(sm, cas_fsk_bit, 100*ld-n_corr);
 						}
 						cas_fsk_bit ^= 1;
 						break;
