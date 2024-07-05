@@ -581,6 +581,7 @@ void core1_entry() {
 	//uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 
 	uint pio_offset = pio_add_program(cas_pio, &pin_io_program);
+
 	uint sm = pio_claim_unused_sm(cas_pio, true);
 	pio_gpio_init(cas_pio, uart1_tx_pin);
 	pio_sm_set_consecutive_pindirs(cas_pio, sm, uart1_tx_pin, 1, true);
@@ -619,6 +620,8 @@ void core1_entry() {
 			if(!i) {
 				// pio_sm_drain_tx_fifo(cas_pio, sm);
 				// pio_sm_drain_tx_fifo(cas_pio, sm_turbo);
+				// gpio_put(turbo_data_pin, 0);
+				// pio_enqueue(sm_turbo, pwm_bit, 1000000); // Force some silence in case the line is left at the opposite state
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
@@ -675,13 +678,14 @@ void core1_entry() {
 				mounts[0].status = offset;
 			} else {
 				mounts[0].mounted = false;
+				mounts[0].status = 0;
 				continue;
 			}
 			if(pwm_silence_duration) {
 				if(cas_block_turbo)
-					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000-t_corr);
+					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000);
 				else
-					pio_enqueue(sm, 1, pwm_silence_duration*1000-n_corr);
+					pio_enqueue(sm, 1, pwm_silence_duration*1000);
 				pwm_silence_duration = 0;
 			}
 			int i=0;
@@ -703,7 +707,8 @@ void core1_entry() {
 						break;
 					case cas_header_fsk:
 						ld = *(uint16_t *)&sector_buffer[i];
-						pio_enqueue(sm, cas_fsk_bit, 100*ld-n_corr);
+						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
+						pio_enqueue(sm, cas_fsk_bit, 100*ld);
 						cas_fsk_bit ^= 1;
 						break;
 					case cas_header_pwmc:
@@ -728,6 +733,7 @@ void core1_entry() {
 						break;
 					case cas_header_pwml:
 						ld = *(uint16_t *)&sector_buffer[i];
+						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
 						pio_enqueue(sm_turbo, pwm_bit, ld*pwm_sample_duration-t_corr);
 						break;
 					default:
@@ -1150,11 +1156,12 @@ int main() {
 		}else if(button_b.read()) {
 			if(d != -1) {
 				if(mounts[d].mounted) {
+					mounts[d].status = 0;
 					mounts[d].mounted = false;
 				}else{
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
-						mounts[d].status = 0;
+						mounts[d].status = 0; // TODO probably obsolete
 						if(!d)
 							last_cas_offset = -1;
 					}
