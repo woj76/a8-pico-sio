@@ -708,7 +708,9 @@ void core1_entry() {
 					case cas_header_fsk:
 						ld = *(uint16_t *)&sector_buffer[i];
 						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						pio_enqueue(sm, cas_fsk_bit, 100*ld);
+						if(ld != 0) {
+							pio_enqueue(sm, cas_fsk_bit, 100*ld);
+						}
 						cas_fsk_bit ^= 1;
 						break;
 					case cas_header_pwmc:
@@ -734,7 +736,9 @@ void core1_entry() {
 					case cas_header_pwml:
 						ld = *(uint16_t *)&sector_buffer[i];
 						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						pio_enqueue(sm_turbo, pwm_bit, ld*pwm_sample_duration-t_corr);
+						if(ld != 0)
+							pio_enqueue(sm_turbo, pwm_bit, ld*pwm_sample_duration-t_corr);
+						pwm_bit ^= 1;
 						break;
 					default:
 						break;
