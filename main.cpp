@@ -452,12 +452,16 @@ volatile FSIZE_t cas_size;
 uint8_t pwm_bit_order;
 uint8_t pwm_bit;
 uint16_t pwm_sample_duration; // in us
+uint16_t cas_sample_duration; // in us
 uint16_t pwm_silence_duration; // in ms
 uint16_t pwm_block_index;
 uint16_t pwm_block_multiple;
 uint16_t dsk_baudrate = 19200;
-uint16_t cas_baudrate;
 uint8_t cas_fsk_bit;
+
+const int t_corr=4;
+const int n_corr=3;
+
 
 bool cas_block_turbo;
 
@@ -487,23 +491,15 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 					offset = 0;
 					goto cas_read_forward_exit;
 				}
-				// cas_baudrate = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
-				//pwm_sample_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
-				pwm_sample_duration = cas_header.aux.aux_w;
-				pwm_sample_duration = 1000000/pwm_sample_duration;
-				//pwm_sample_duration = 1000000/pwm_sample_duration-3;
-				// pwm_sample_duration = 988467/pwm_sample_duration;
-				// pwm_sample_duration = 1666;
+				cas_sample_duration = 1000000/cas_header.aux.aux_w - n_corr;
 				break;
 			case cas_header_data:
 				cas_block_turbo = false;
-				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
 				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 1;
 				goto cas_read_forward_exit;
 			case cas_header_fsk:
 				cas_block_turbo = false;
-				// pwm_silence_duration = (cas_header.aux1 & 0xFF) | ((cas_header.aux2 << 8) & 0xFF00);
 				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 2;
 				cas_fsk_bit = 0;
@@ -528,7 +524,7 @@ FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 					goto cas_read_forward_exit;
 				}
 				offset += bytes_read;
-				pwm_sample_duration = 500000/pwm_sample_duration; // Seems to also work with +1
+				pwm_sample_duration = 500000/pwm_sample_duration;
 				break;
 			case cas_header_pwmc:
 				cas_block_turbo = true;
@@ -563,8 +559,6 @@ const uint uart1_tx_pin = 4; // 3; // 25; // 4;
 const uint uart1_rx_pin = 5;
 
 const PIO cas_pio = pio0;
-const int t_corr=4;
-const int n_corr=3;
 
 void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 	while(pio_sm_is_tx_fifo_full(cas_pio, sm))
@@ -605,7 +599,7 @@ void core1_entry() {
 	pio_sm_config c1 = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
 	sm_config_set_clkdiv(&c1, custom_sys_clock*1.0f);
-	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
+	// sm_config_set_set_pins(&c1, turbo_data_pin, 1);
 	sm_config_set_out_pins(&c1, turbo_data_pin, 1);
 	sm_config_set_out_shift(&c1, true, false, 32);
 	pio_sm_init(cas_pio, sm_turbo, pio_offset, &c1);
@@ -623,8 +617,8 @@ void core1_entry() {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(!i) {
-				// TODO probably not necessary
 				// pio_sm_drain_tx_fifo(cas_pio, sm);
+				// pio_sm_drain_tx_fifo(cas_pio, sm_turbo);
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
@@ -636,7 +630,7 @@ void core1_entry() {
 						mounts[i].mounted = false;
 						led.set_rgb(255,0,0);
 					}else{
-						cas_baudrate = 600;
+						cas_sample_duration = 1000000/600-n_corr;
 						led.set_rgb(0,255,0);
 					}
 					f_close(&fil);
@@ -683,7 +677,6 @@ void core1_entry() {
 				mounts[0].mounted = false;
 				continue;
 			}
-			// cas_block determines the bit value and target pio
 			if(pwm_silence_duration) {
 				if(cas_block_turbo)
 					pio_enqueue(sm_turbo, 0, pwm_silence_duration*1000-t_corr);
@@ -702,33 +695,14 @@ void core1_entry() {
 					case cas_header_data:
 						//while (!uart_is_writable(uart1));
 						//uart_get_hw(uart1)->dr = sector_buffer[i];
-						// e = 0 | (() << 1);
-						pio_enqueue(sm, 0, pwm_sample_duration-n_corr);
-						//e.bit_value = 0;
-						//e.delay = pwm_sample_duration;
-						//queue_add_blocking(&pwm_queue, &e);
+						pio_enqueue(sm, 0, cas_sample_duration);
 						b = sector_buffer[i];
-						for(int j=0; j!=8; j++) {
-							//e.bit_value = (b >> j) & 0x1;
-							//e.delay = pwm_sample_duration;
-							//queue_add_blocking(&pwm_queue, &e);
-							// e = ((b >> j) & 0x1) | ((pwm_sample_duration) << 1);
-							pio_enqueue(sm, (b >> j) & 0x1, pwm_sample_duration-n_corr);
-
-						}
-						// e.bit_value = 1;
-						// e.delay = pwm_sample_duration;
-						// queue_add_blocking(&pwm_queue, &e);
-						// e = 1 | ((pwm_sample_duration-3) << 1);
-						// pio_enqueue(e);
-						pio_enqueue(sm, 1, pwm_sample_duration-n_corr);
+						for(int j=0; j!=8; j++)
+							pio_enqueue(sm, (b >> j) & 0x1, cas_sample_duration);
+						pio_enqueue(sm, 1, cas_sample_duration);
 						break;
 					case cas_header_fsk:
-						ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						//e.delay = 100*ld;
-						//e.bit_value = cas_fsk_bit;
-						//queue_add_blocking(&pwm_queue, &e);
-						// e = cas_fsk_bit | ((100*ld-3) << 1);
+						ld = *(uint16_t *)&sector_buffer[i];
 						pio_enqueue(sm, cas_fsk_bit, 100*ld-n_corr);
 						cas_fsk_bit ^= 1;
 						break;
@@ -737,11 +711,6 @@ void core1_entry() {
 						for(uint16_t j=0; j<ld; j++) {
 							pio_enqueue(sm_turbo, pwm_bit, sector_buffer[i]*pwm_sample_duration-t_corr);
 							pio_enqueue(sm_turbo, pwm_bit^1, sector_buffer[i]*pwm_sample_duration-t_corr);
-							//e.bit_value = pwm_bit;
-							//e.delay = sector_buffer[i]*pwm_sample_duration;
-							//queue_add_blocking(&pwm_queue, &e);
-							//e.bit_value = pwm_bit ^ 1;
-							//queue_add_blocking(&pwm_queue, &e);
 						}
 						break;
 					case cas_header_pwmd:
@@ -755,19 +724,10 @@ void core1_entry() {
 							uint8_t d = (b >> j) & 0x1 ? cas_header.aux.aux_b.aux2 : cas_header.aux.aux_b.aux1;
 							pio_enqueue(sm_turbo, pwm_bit, d*pwm_sample_duration-t_corr);
 							pio_enqueue(sm_turbo, pwm_bit^1, d*pwm_sample_duration-t_corr);
-							//e.bit_value = pwm_bit;
-							//e.delay = d*pwm_sample_duration;
-							//queue_add_blocking(&pwm_queue, &e);
-							//e.bit_value = pwm_bit ^ 1;
-							//queue_add_blocking(&pwm_queue, &e);
 						}
 						break;
 					case cas_header_pwml:
-						ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						//e.bit_value = pwm_bit;
-						//e.delay = ld*pwm_sample_duration;
-						//queue_add_blocking(&pwm_queue, &e);
-						//pwm_bit ^= 1;
+						ld = *(uint16_t *)&sector_buffer[i];
 						pio_enqueue(sm_turbo, pwm_bit, ld*pwm_sample_duration-t_corr);
 						break;
 					default:
@@ -775,6 +735,8 @@ void core1_entry() {
 				}
 				i += pwm_block_multiple;
 			}
+			if(cas_header.signature == cas_header_pwml)
+				pwm_bit = b;
 			if(pwm_block_index == cas_header.chunk_length) {
 				while(!pio_sm_is_tx_fifo_empty(cas_pio, cas_block_turbo ? sm_turbo : sm))
 					tight_loop_contents();
@@ -783,8 +745,6 @@ void core1_entry() {
 			//if(cas_header.signature == cas_header_fsk) {
 			//	gpio_set_function(uart1_tx_pin, GPIO_FUNC_UART);
 			//}
-			if(cas_header.signature == cas_header_pwml)
-				pwm_bit = b;
 		}
 	}
 }
