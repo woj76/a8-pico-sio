@@ -1,10 +1,9 @@
 .program pin_io
 
 .wrap_target
-	pull block ; Grab next 32bit word
+	; pull block ; Grab next 32bit word, TODO can do this with auto pull!
 	out pins,1 ; output the first bit
 	out x,31 ; copy the next 31 bits - delay in us
 wait_loop:
 	jmp x--, wait_loop ; delay for (x + 1) cycles TODO - overhead of 3 cycles to account for when passing in the information
-
 .wrap
