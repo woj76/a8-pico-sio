@@ -549,9 +549,35 @@ cas_read_forward_exit:
 	return offset;
 }
 
+// TODO Different turbo configurations
+// TODO Can PIO control two pins simultaneously (needed for one of the Turbo 2000 systems)
+// TODO If not, change everything to specify the pin for the different blocks
+// TODO How does Turbo D work?
+
 const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
+const uint command_line_pin = 11;
+
+// Turbo 2000 KSO
+const uint32_t turbo_motor_pin_mask = 0x00000004; // pin 2
+const uint32_t turbo_motor_value_on = 0x00000000; // expect 0 for motor on
+
+// Turbo 2001 / 2000F SIO
+//const uint32_t turbo_motor_pin_mask = 0x00000C00; // 10 and 11
+//const uint32_t turbo_motor_value_on = 0x00000400; // 10 high 11 low
+
+const uint32_t normal_motor_pin_mask = 0x00000400; // pin 10
+const uint32_t normal_motor_value_on = 0x00000400; // expect 1 for motor on
+
+// 0 1 2 3 4 5 6 7 8 9 10
+// 1 2 4 8 1 2 4 8 1 2 4
+
+// Turbo 2000 KSO
 const uint turbo_data_pin = 3;
+
+// Turbo 2001 / 2000F SIO
+//const uint turbo_data_pin = 4;
+
 // const uint turbo_data_pin = 25; // LED=25 for testing
 const uint uart1_tx_pin = 4; // 3; // 25; // 4;
 const uint uart1_rx_pin = 5;
@@ -572,7 +598,8 @@ void dma_handler() {
 	else
 		dma_going = true;
 	if(queue_try_remove(&pio_queue, &pio_e))
-		dma_channel_set_read_addr(dc, &pio_e, true);
+		// dma_channel_set_read_addr(dc, &pio_e, true);
+		dma_channel_start(dc);
 	else
 		dma_going = false;
 }
@@ -594,6 +621,26 @@ void core1_entry() {
 	// gpio_init(turbo_data_pin); gpio_set_dir(turbo_data_pin, GPIO_OUT); gpio_put(turbo_data_pin, 1);
 	gpio_init(turbo_motor_pin); gpio_set_dir(turbo_motor_pin, GPIO_IN); gpio_pull_up(turbo_motor_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
+	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
+/*
+	gpio_init_mask(normal_motor_pin_mask); gpio_set_dir_in_masked(normal_motor_pin_mask);
+	gpio_init_mask(turbo_motor_pin_mask); gpio_set_dir_in_masked(turbo_motor_pin_mask);
+	for(int pin=0;pin<32;pin++) {
+		if((turbo_motor_pin_mask >> pin) & 0x1) {
+			if((turbo_motor_value_on >> pin) & 0x1) {
+				gpio_pull_down(pin);
+			} else {
+				gpio_pull_up(pin);
+			}
+		} else if((normal_motor_pin_mask >> pin) & 0x1) {
+			if((normal_motor_value_on >> pin) & 0x1) {
+				gpio_pull_down(pin);
+			} else {
+				gpio_pull_up(pin);
+			}
+		}
+	}
+*/
 	//uart_init(uart1, dsk_baudrate);
 	//gpio_set_function(uart1_tx_pin, GPIO_FUNC_UART);
 	//gpio_set_function(uart1_rx_pin, GPIO_FUNC_UART);
@@ -635,7 +682,7 @@ void core1_entry() {
 	channel_config_set_transfer_data_size(&dma_c, DMA_SIZE_32);
 	channel_config_set_read_increment(&dma_c, false);
 	channel_config_set_dreq(&dma_c, pio_get_dreq(cas_pio, sm, true));
-	dma_channel_configure(dma_channel, &dma_c, &cas_pio->txf[sm], NULL, 1, false);
+	dma_channel_configure(dma_channel, &dma_c, &cas_pio->txf[sm], &pio_e, 1, false);
 	dma_channel_set_irq0_enabled(dma_channel, true);
 
 	dma_channel_turbo = dma_claim_unused_channel(true);
@@ -643,7 +690,7 @@ void core1_entry() {
 	channel_config_set_transfer_data_size(&dma_c1, DMA_SIZE_32);
 	channel_config_set_read_increment(&dma_c1, false);
 	channel_config_set_dreq(&dma_c1, pio_get_dreq(cas_pio, sm_turbo, true));
-	dma_channel_configure(dma_channel_turbo, &dma_c1, &cas_pio->txf[sm_turbo], NULL, 1, false);
+	dma_channel_configure(dma_channel_turbo, &dma_c1, &cas_pio->txf[sm_turbo], &pio_e, 1, false);
 	dma_channel_set_irq0_enabled(dma_channel_turbo, true);
 
 	irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
@@ -665,6 +712,7 @@ void core1_entry() {
 				// pio_sm_drain_tx_fifo(cas_pio, sm_turbo);
 				// gpio_put(turbo_data_pin, 0);
 				// pio_enqueue(pwm_bit, 1000000); // Force some silence in case the line is left at the opposite state
+				cas_sample_duration = 1000000/600-n_corr;
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
@@ -676,7 +724,6 @@ void core1_entry() {
 						mounts[i].mounted = false;
 						led.set_rgb(255,0,0);
 					}else{
-						cas_sample_duration = 1000000/600-n_corr;
 						led.set_rgb(0,255,0);
 					}
 					f_close(&fil);
@@ -688,7 +735,9 @@ void core1_entry() {
 		}
 
 		FSIZE_t offset = mounts[0].status;
-		if(mounts[0].mounted && offset && offset < cas_size && (cas_block_turbo ? 0 : 1) == gpio_get(cas_block_turbo ? turbo_motor_pin : normal_motor_pin)) {
+		if(mounts[0].mounted && offset && offset < cas_size &&
+			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
+				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
 			FSIZE_t to_read = 0;
 			FRESULT f_stat;
 			do {
@@ -698,13 +747,6 @@ void core1_entry() {
 					break;
 				if((f_stat = f_lseek(&fil, offset)) != FR_OK)
 					break;
-				if(pwm_block_index == cas_header.chunk_length) {
-					offset = cas_read_forward(&fil, offset);
-					if(offset == -1) {
-						f_stat = FR_INT_ERR;
-						break;
-					}
-				}
 				to_read = std::min(cas_header.chunk_length-pwm_block_index, ((cas_header.signature == cas_header_data || cas_header.signature == cas_header_fsk) ? 256 : 128)*pwm_block_multiple);
 				if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
 					break;
@@ -795,6 +837,16 @@ void core1_entry() {
 				// while(dma_going)
 				while(!pio_sm_is_tx_fifo_empty(cas_pio, cas_block_turbo ? sm_turbo : sm))
 					tight_loop_contents();
+				if(offset < cas_size && mounts[0].mounted) {
+					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+						offset = cas_read_forward(&fil, offset);
+					}
+					f_close(&fil);
+					f_mount(0, "", 1);
+					mounts[0].status = offset;
+					if(!offset)
+						mounts[0].mounted = false;
+				}
 				// sleep_us(100);
 			}
 			//if(cas_header.signature == cas_header_fsk) {
