@@ -510,9 +510,9 @@ FSIZE_t
 				pwm_bit_order = (cas_header.aux.aux_b.aux1 >> 2) & 0x1;
 				cas_header.aux.aux_b.aux1 &= 0x3;
 				if(cas_header.aux.aux_b.aux1 == 0b01)
-					pwm_bit = 1;
-				else if(cas_header.aux.aux_b.aux1 == 0b10)
 					pwm_bit = 0;
+				else if(cas_header.aux.aux_b.aux1 == 0b10)
+					pwm_bit = 1;
 				else {
 					offset = 0;
 					goto cas_read_forward_exit;
