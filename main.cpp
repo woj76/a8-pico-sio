@@ -539,6 +539,7 @@ FSIZE_t
 				cas_block_turbo = true;
 				pwm_silence_duration = cas_header.aux.aux_w;
 				pwm_block_multiple = 2;
+				cas_fsk_bit = pwm_bit;
 				goto cas_read_forward_exit;
 			default:
 				break;
@@ -721,8 +722,6 @@ void
 			int bs, be, bd;
 			uint8_t b;
 			uint16_t ld;
-			if(cas_header.signature == cas_header_pwml)
-				b = pwm_bit;
 			while(i < to_read) {
 				switch(cas_header.signature) {
 					case cas_header_data:
@@ -766,16 +765,14 @@ void
 						ld = *(uint16_t *)&sector_buffer[i];
 						//ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
 						if(ld != 0)
-							pio_enqueue(sm_turbo, pwm_bit, ld*pwm_sample_duration-t_corr);
-						pwm_bit ^= 1;
+							pio_enqueue(sm_turbo, cas_fsk_bit, ld*2*pwm_sample_duration-t_corr);
+						cas_fsk_bit ^= 1;
 						break;
 					default:
 						break;
 				}
 				i += pwm_block_multiple;
 			}
-			if(cas_header.signature == cas_header_pwml)
-				pwm_bit = b;
 			if(pwm_block_index == cas_header.chunk_length) {
 				bool old_cas_block_turbo = cas_block_turbo;
 				if(offset < cas_size && mounts[0].mounted) {
@@ -792,7 +789,8 @@ void
 				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || old_cas_block_turbo != cas_block_turbo) {
 					while(!pio_sm_is_tx_fifo_empty(cas_pio, old_cas_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
-					sleep_us(1000);
+					sleep_us(50000); // 40 ms does not work for Blizzard 50 ms worked for Blizzard couple of times
+					// TODO is this also needed so long for Blizzard when data out is connected?
 				}
 			}
 			//if(cas_header.signature == cas_header_fsk) {
