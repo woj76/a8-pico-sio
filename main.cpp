@@ -510,9 +510,9 @@ FSIZE_t
 				pwm_bit_order = (cas_header.aux.aux_b.aux1 >> 2) & 0x1;
 				cas_header.aux.aux_b.aux1 &= 0x3;
 				if(cas_header.aux.aux_b.aux1 == 0b01)
-					pwm_bit = 0;
+					pwm_bit = 0; // 0
 				else if(cas_header.aux.aux_b.aux1 == 0b10)
-					pwm_bit = 1;
+					pwm_bit = 1; // 1
 				else {
 					offset = 0;
 					goto cas_read_forward_exit;
@@ -558,30 +558,32 @@ const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
 
-// Turbo 2000 KSO
+// Turbo 2000 KSO - Joy 2 port
 //const uint32_t turbo_motor_pin_mask = 0x00000004; // pin 2
 //const uint32_t turbo_motor_value_on = 0x00000000; // expect 0 for motor on
-
-// Turbo 2001 / 2000F SIO
-const uint32_t turbo_motor_pin_mask = 0x00000C00; // 10 and 11
-const uint32_t turbo_motor_value_on = 0x00000400; // 10 high 11 low
-
-// Turbo motor conventional, needed for Turbo D (Turbo Blizzard)
-//const uint32_t turbo_motor_pin_mask = 0x00000400; // pin 2
-//const uint32_t turbo_motor_value_on = 0x00000400; // expect 0 for motor on
+// Turbo 2001 / 2000F SIO - motor and command line
+const uint32_t turbo_motor_pin_mask = 0x00000C00; // pin 10 + 11
+const uint32_t turbo_motor_value_on = 0x00000400; // motor high, command low
+// Same as conventional, needed for Turbo D
+//const uint32_t turbo_motor_pin_mask = 0x00000400;
+//const uint32_t turbo_motor_value_on = 0x00000400;
+// Turbo Blizzard - motor high, sio_rx low
+//const uint32_t turbo_motor_pin_mask = 0x00000420; // pin 5 + 10
+//const uint32_t turbo_motor_value_on = 0x00000400; // motor high, sio_rx low
 
 const uint32_t normal_motor_pin_mask = 0x00000400; // pin 10
-const uint32_t normal_motor_value_on = 0x00000400; // expect 1 for motor on
-
-// Turbo 2000 KSO / Turbo D
-//const uint turbo_data_pin = 3;
-
-// Turbo 2001 / 2000F SIO / Turbo Blizzard
-const uint turbo_data_pin = 4;
+const uint32_t normal_motor_value_on = 0x00000400; // motor high
 
 // const uint turbo_data_pin = 25; // LED=25 for testing
-const uint uart1_tx_pin = 4; // 3; // 25; // 4;
-const uint uart1_rx_pin = 5;
+const uint sio_tx_pin = 4; // 3; // 25; // 4;
+const uint sio_rx_pin = 5;
+
+// Turbo 2000 KSO
+//const uint turbo_data_pin = 3;
+// Turbo D
+//const uint turbo_data_pin = 22;
+// Turbo 2001 / 2000F SIO / Turbo Blizzard
+const uint turbo_data_pin = sio_tx_pin;
 
 const PIO cas_pio = pio0;
 
@@ -594,7 +596,8 @@ volatile bool dma_going = false;
 int dma_channel, dma_channel_turbo;
 
 queue_t pio_queue;
-const int pio_queue_size = 10*8;
+// 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
+const int pio_queue_size = 16*8;
 
 uint32_t pio_e;
 
@@ -725,8 +728,6 @@ void
 			while(i < to_read) {
 				switch(cas_header.signature) {
 					case cas_header_data:
-						//while (!uart_is_writable(uart1));
-						//uart_get_hw(uart1)->dr = sector_buffer[i];
 						pio_enqueue(sm, 0, cas_sample_duration);
 						b = sector_buffer[i];
 						for(int j=0; j!=8; j++)
@@ -786,11 +787,10 @@ void
 						mounts[0].mounted = false;
 				}
 				// TODO what about FSK?
-				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || old_cas_block_turbo != cas_block_turbo) {
+				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || old_cas_block_turbo^cas_block_turbo) {
 					while(!pio_sm_is_tx_fifo_empty(cas_pio, old_cas_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
-					sleep_us(50000); // 40 ms does not work for Blizzard 50 ms worked for Blizzard couple of times
-					// TODO is this also needed so long for Blizzard when data out is connected?
+					sleep_us(1000);
 				}
 			}
 			//if(cas_header.signature == cas_header_fsk) {
@@ -803,12 +803,15 @@ void
 void core1_entry() {
 	timing_base_clock = clock_get_hz(clk_sys);
 	//timing_base_clock = 1000000;
-	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000);
-	max_clock_ms = (max_clock_ms/1000)*1000;
-	// gpio_init(turbo_data_pin); gpio_set_dir(turbo_data_pin, GPIO_OUT); gpio_put(turbo_data_pin, 1);
+	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
+	// max_clock_ms = (max_clock_ms/1000)*1000;
 	gpio_init(turbo_motor_pin); gpio_set_dir(turbo_motor_pin, GPIO_IN); gpio_pull_up(turbo_motor_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
+
+	gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
+	// gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
+	// gpio_set_function(turbo_data_pin, GPIO_FUNC_SIO);
 
 	//uart_init(uart1, dsk_baudrate);
 	//gpio_set_function(uart1_tx_pin, GPIO_FUNC_UART);
@@ -829,14 +832,14 @@ void core1_entry() {
  	float clk_divider = (float)clock_get_hz(clk_sys)/1000000;
 
 	uint sm = pio_claim_unused_sm(cas_pio, true);
-	pio_gpio_init(cas_pio, uart1_tx_pin);
-	pio_sm_set_consecutive_pindirs(cas_pio, sm, uart1_tx_pin, 1, true);
+	pio_gpio_init(cas_pio, sio_tx_pin);
+	pio_sm_set_consecutive_pindirs(cas_pio, sm, sio_tx_pin, 1, true);
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 	if(set_clock_div)
 		sm_config_set_clkdiv(&c, clk_divider);
 	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
-	sm_config_set_out_pins(&c, uart1_tx_pin, 1);
+	sm_config_set_out_pins(&c, sio_tx_pin, 1);
 	sm_config_set_out_shift(&c, true, true, 32);
 	pio_sm_init(cas_pio, sm, pio_offset, &c);
 	pio_sm_set_enabled(cas_pio, sm, true);
