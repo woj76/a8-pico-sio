@@ -790,7 +790,7 @@ void
 				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || old_cas_block_turbo^cas_block_turbo) {
 					while(!pio_sm_is_tx_fifo_empty(cas_pio, old_cas_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
-					sleep_us(1000);
+					sleep_ms(10);
 				}
 			}
 			//if(cas_header.signature == cas_header_fsk) {
