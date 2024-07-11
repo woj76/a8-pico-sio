@@ -557,14 +557,15 @@ cas_read_forward_exit:
 const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
+const uint proceed_pin = 21;
 
-// Turbo 2000 KSO - Joy 2 port
+// Turbo 2000 KSO - Joy 2 port, pin 3
 //const uint32_t turbo_motor_pin_mask = 0x00000004; // pin 2
 //const uint32_t turbo_motor_value_on = 0x00000000; // expect 0 for motor on
 // Turbo 2001 / 2000F SIO - motor and command line
 const uint32_t turbo_motor_pin_mask = 0x00000C00; // pin 10 + 11
 const uint32_t turbo_motor_value_on = 0x00000400; // motor high, command low
-// Same as conventional, needed for Turbo D
+// Same as conventional, needed for Turbo D, Turbo 6000
 //const uint32_t turbo_motor_pin_mask = 0x00000400;
 //const uint32_t turbo_motor_value_on = 0x00000400;
 // Turbo Blizzard - motor high, sio_rx low
@@ -575,15 +576,17 @@ const uint32_t normal_motor_pin_mask = 0x00000400; // pin 10
 const uint32_t normal_motor_value_on = 0x00000400; // motor high
 
 // const uint turbo_data_pin = 25; // LED=25 for testing
-const uint sio_tx_pin = 4; // 3; // 25; // 4;
+const uint sio_tx_pin = 4;
 const uint sio_rx_pin = 5;
 
 // Turbo 2000 KSO
-//const uint turbo_data_pin = 3;
+//const uint turbo_data_pin = 3; // Joy 2 port, pin 4
 // Turbo D
-//const uint turbo_data_pin = 22;
+//const uint turbo_data_pin = 22; // Joy 2 port, pin 1
 // Turbo 2001 / 2000F SIO / Turbo Blizzard
 const uint turbo_data_pin = sio_tx_pin;
+// Turbo 6000, this needs pwm_bit invertion
+//const uint turbo_data_pin = proceed_pin;
 
 const PIO cas_pio = pio0;
 
