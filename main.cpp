@@ -266,9 +266,9 @@ int file_entry_cmp(const void* p1, const void* p2) {
 
 size_t get_filename_ext(char *filename) {
 	size_t l = strlen(filename);
-	size_t i=0;
-	while(i < l && filename[i++] != '.');
-	return i;
+	size_t i = l;
+	while(i > 0 && filename[--i] != '.');
+	return (i == 0 || l-i > 4) ? l : i+1;
 }
 
 enum file_type {none, boot, disk, casette};
@@ -298,12 +298,12 @@ size_t mark_directory(size_t is_directory_mask, size_t current_file_name_index) 
 
 
 uint8_t read_directory() {
-	FATFS FatFs; FILINFO fno; DIR dir;
+	FATFS fatfs; FILINFO fno; DIR dir;
 	size_t current_file_name_index = 0;
 	uint8_t ret = 1;
 
 	num_files = 0;
-	if (f_mount(&FatFs, "", 1) == FR_OK) {
+	if (f_mount(&fatfs, "", 1) == FR_OK) {
 		if (f_opendir(&dir, curr_path) == FR_OK) {
 			while (true) {
 				if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
@@ -415,9 +415,6 @@ volatile mounts_type mounts[] = {
   // Blocking lock for FS access?
   // go through mounts that are true and status 0: try to validate the file and set status accordingly
 
-  // if motor on and cas mounted: process next "block" for cas: in buffered increments process one complete data block,
-  //   if this is normal C:, set the baud rate first if it is a regular data block, then revert to the old one
-
   // otherwise, check if command line low and serial read waiting, act accordingly
 */
 
@@ -431,13 +428,14 @@ const uint32_t cas_header_pwms = 0x736D7770;
 const uint32_t cas_header_pwmc = 0x636D7770;
 const uint32_t cas_header_pwmd = 0x646D7770;
 const uint32_t cas_header_pwml = 0x6C6D7770;
+
 uint32_t timing_base_clock, max_clock_ms;
 
 typedef struct __attribute__((__packed__)) {
 	uint32_t signature;
 	uint16_t chunk_length;
 	union {
-		struct { uint8_t aux1; uint8_t aux2; } aux_b;
+		uint8_t aux_b[2];
 		uint16_t aux_w;
 	} aux;
 } cas_header_type;
@@ -446,24 +444,17 @@ cas_header_type cas_header;
 volatile FSIZE_t cas_size;
 uint8_t pwm_bit_order;
 uint8_t pwm_bit;
-uint32_t pwm_sample_duration; // in us
-uint32_t cas_sample_duration; // in us
-uint16_t pwm_silence_duration; // in ms
-uint16_t pwm_block_index;
-uint16_t pwm_block_multiple;
+uint32_t pwm_sample_duration; // in cycles dep the base timing value
+uint32_t cas_sample_duration; // in cycles dep the base timing value
+uint16_t silence_duration; // in ms
+uint16_t cas_block_index;
+uint16_t cas_block_multiple;
 uint16_t dsk_baudrate = 19200;
 uint8_t cas_fsk_bit;
 
-const int t_corr=3;
-const int n_corr=3;
-
 volatile bool cas_block_turbo;
 
-FSIZE_t
-//__not_in_flash_func(
-	cas_read_forward
-//)
-(FIL *fil, FSIZE_t offset) {
+FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	UINT bytes_read;
 	if(f_lseek(fil, offset) != FR_OK) {
 		offset = 0;
@@ -475,7 +466,7 @@ FSIZE_t
 			goto cas_read_forward_exit;
 		}
 		offset += bytes_read;
-		pwm_block_index = 0;
+		cas_block_index = 0;
 		switch(cas_header.signature) {
 			case cas_header_FUJI:
 				offset += cas_header.chunk_length;
@@ -489,17 +480,17 @@ FSIZE_t
 					offset = 0;
 					goto cas_read_forward_exit;
 				}
-				cas_sample_duration = timing_base_clock/cas_header.aux.aux_w - n_corr;
+				cas_sample_duration = timing_base_clock/cas_header.aux.aux_w;
 				break;
 			case cas_header_data:
 				cas_block_turbo = false;
-				pwm_silence_duration = cas_header.aux.aux_w;
-				pwm_block_multiple = 1;
+				silence_duration = cas_header.aux.aux_w;
+				cas_block_multiple = 1;
 				goto cas_read_forward_exit;
 			case cas_header_fsk:
 				cas_block_turbo = false;
-				pwm_silence_duration = cas_header.aux.aux_w;
-				pwm_block_multiple = 2;
+				silence_duration = cas_header.aux.aux_w;
+				cas_block_multiple = 2;
 				cas_fsk_bit = 0;
 				goto cas_read_forward_exit;
 			case cas_header_pwms:
@@ -507,11 +498,11 @@ FSIZE_t
 					offset = 0;
 					goto cas_read_forward_exit;
 				}
-				pwm_bit_order = (cas_header.aux.aux_b.aux1 >> 2) & 0x1;
-				cas_header.aux.aux_b.aux1 &= 0x3;
-				if(cas_header.aux.aux_b.aux1 == 0b01)
+				pwm_bit_order = (cas_header.aux.aux_b[0] >> 2) & 0x1;
+				cas_header.aux.aux_b[0] &= 0x3;
+				if(cas_header.aux.aux_b[0] == 0b01)
 					pwm_bit = 0; // 0
-				else if(cas_header.aux.aux_b.aux1 == 0b10)
+				else if(cas_header.aux.aux_b[0] == 0b10)
 					pwm_bit = 1; // 1
 				else {
 					offset = 0;
@@ -527,18 +518,17 @@ FSIZE_t
 				break;
 			case cas_header_pwmc:
 				cas_block_turbo = true;
-				pwm_silence_duration = cas_header.aux.aux_w;
-				pwm_block_multiple = 3;
+				silence_duration = cas_header.aux.aux_w;
+				cas_block_multiple = 3;
 				goto cas_read_forward_exit;
 			case cas_header_pwmd:
 				cas_block_turbo = true;
-				// pwm_silence_duration = 0;
-				pwm_block_multiple = 1;
+				cas_block_multiple = 1;
 				goto cas_read_forward_exit;
 			case cas_header_pwml:
 				cas_block_turbo = true;
-				pwm_silence_duration = cas_header.aux.aux_w;
-				pwm_block_multiple = 2;
+				silence_duration = cas_header.aux.aux_w;
+				cas_block_multiple = 2;
 				cas_fsk_bit = pwm_bit;
 				goto cas_read_forward_exit;
 			default:
@@ -549,50 +539,48 @@ cas_read_forward_exit:
 	return offset;
 }
 
-// TODO Different turbo configurations
-// TODO Can PIO control two pins simultaneously (needed for one of the Turbo 2000 systems)
-// TODO If not, change everything to specify the pin for the different blocks
-// TODO How does Turbo D work?
+// TODO Different turbo configurations in the menu
 
+// const uint turbo_data_pin = 25; // LED=25 for testing
+const uint joy2_p3_pin = 2;
+const uint joy2_p4_pin = 3;
+const uint joy2_p1_pin = 22;
 const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
 const uint proceed_pin = 21;
-
-// Turbo 2000 KSO - Joy 2 port, pin 3
-//const uint32_t turbo_motor_pin_mask = 0x00000004; // pin 2
-//const uint32_t turbo_motor_value_on = 0x00000000; // expect 0 for motor on
-// Turbo 2001 / 2000F SIO - motor and command line
-const uint32_t turbo_motor_pin_mask = 0x00000C00; // pin 10 + 11
-const uint32_t turbo_motor_value_on = 0x00000400; // motor high, command low
-// Same as conventional, needed for Turbo D, Turbo 6000
-//const uint32_t turbo_motor_pin_mask = 0x00000400;
-//const uint32_t turbo_motor_value_on = 0x00000400;
-// Turbo Blizzard - motor high, sio_rx low
-//const uint32_t turbo_motor_pin_mask = 0x00000420; // pin 5 + 10
-//const uint32_t turbo_motor_value_on = 0x00000400; // motor high, sio_rx low
-
-const uint32_t normal_motor_pin_mask = 0x00000400; // pin 10
-const uint32_t normal_motor_value_on = 0x00000400; // motor high
-
-// const uint turbo_data_pin = 25; // LED=25 for testing
+const uint interrupt_pin = 26;
 const uint sio_tx_pin = 4;
 const uint sio_rx_pin = 5;
 
+const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin); // 0x00000400; // pin 10
+const uint32_t normal_motor_value_on = (1u << normal_motor_pin); // 0x00000400; // motor high
+
+// Turbo 2000 KSO - Joy 2 port, pin 3
+const uint32_t turbo_motor_pin_mask = (1u << joy2_p3_pin); // 0x00000004; // pin 2
+const uint32_t turbo_motor_value_on = (0u << joy2_p3_pin); // 0x00000000; // expect 0 for motor on
+// Turbo 2001 / 2000F SIO - motor and command line
+//const uint32_t turbo_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin); // 0x00000C00; // pin 10 + 11
+//const uint32_t turbo_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin); // 0x00000400; // motor high, command low
+// Same as conventional, needed for Turbo D, Turbo 6000
+//const uint32_t turbo_motor_pin_mask = normal_motor_pin_mask;
+//const uint32_t turbo_motor_value_on = normal_motor_value_on;
+// Turbo Blizzard - motor high, sio_rx low
+//const uint32_t turbo_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000420;
+//const uint32_t turbo_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000400;
+
 // Turbo 2000 KSO
-//const uint turbo_data_pin = 3; // Joy 2 port, pin 4
+const uint turbo_data_pin = joy2_p4_pin; // Joy 2 port, pin 4
 // Turbo D
-//const uint turbo_data_pin = 22; // Joy 2 port, pin 1
+//const uint turbo_data_pin = joy2_p1_pin; // Joy 2 port, pin 1
 // Turbo 2001 / 2000F SIO / Turbo Blizzard
-const uint turbo_data_pin = sio_tx_pin;
+//const uint turbo_data_pin = sio_tx_pin;
 // Turbo 6000, this needs pwm_bit invertion
-//const uint turbo_data_pin = proceed_pin;
+// const uint turbo_data_pin = proceed_pin;
+// Rambit, also needs bit inversion
+//const uint turbo_data_pin = interrupt_pin;
 
 const PIO cas_pio = pio0;
-
-#define USE_DMA_FOR_PIO
-
-#ifdef USE_DMA_FOR_PIO
 
 volatile bool dma_block_turbo;
 volatile bool dma_going = false;
@@ -604,11 +592,7 @@ const int pio_queue_size = 16*8;
 
 uint32_t pio_e;
 
-void
-//__not_in_flash_func(
-	dma_handler
-//)
-() {
+void dma_handler() {
 	int dc = dma_block_turbo ? dma_channel_turbo : dma_channel;
 	if(dma_going)
 		dma_hw->ints0 = 1u << dc;
@@ -620,12 +604,8 @@ void
 		dma_going = false;
 }
 
-void
-//__not_in_flash_func(
-	pio_enqueue
-//)
-(uint sm, uint8_t b, uint32_t d) {
-	uint32_t e = (b | (d << 1));
+void pio_enqueue(uint8_t b, uint32_t d) {
+	uint32_t e = (b | ((d - pio_prog_cycle_corr) << 1));
 	queue_add_blocking(&pio_queue, &e);
 	if(!dma_going) {
 		dma_block_turbo = cas_block_turbo;
@@ -633,26 +613,16 @@ void
 	}
 }
 
-#else
-
-void
-//__not_in_flash_func(
-	pio_enqueue
-//)
-(uint sm, uint8_t b, uint32_t d) {
+/*
+void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 	uint32_t e = (b | (d << 1));
 	while(pio_sm_is_tx_fifo_full(cas_pio, sm))
 		tight_loop_contents();
 	cas_pio->txf[sm] = (b | (d << 1));
 }
+*/
 
-#endif
-
-void
-//__not_in_flash_func(
-	main_sio_loop
-//)
-(uint sm, uint sm_turbo) {
+void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
 	UINT bytes_read;
@@ -661,7 +631,7 @@ void
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(!i) {
-				cas_sample_duration = timing_base_clock/600-n_corr;
+				cas_sample_duration = timing_base_clock/600;
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
 				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
@@ -696,7 +666,7 @@ void
 					break;
 				if((f_stat = f_lseek(&fil, offset)) != FR_OK)
 					break;
-				to_read = std::min(cas_header.chunk_length-pwm_block_index, ((cas_header.signature == cas_header_data || cas_header.signature == cas_header_fsk) ? 256 : 128)*pwm_block_multiple);
+				to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 				if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
 					break;
 				if(bytes_read != to_read) {
@@ -704,7 +674,7 @@ void
 					break;
 				}
 				offset += to_read;
-				pwm_block_index += to_read;
+				cas_block_index += to_read;
 			}while(false);
 			f_close(&fil);
 			f_mount(0, "", 1);
@@ -715,41 +685,42 @@ void
 				mounts[0].status = 0;
 				continue;
 			}
-			int corr = (cas_block_turbo ? t_corr : n_corr);
 			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
-			while(pwm_silence_duration > 0) {
-				uint16_t silence_block_len = pwm_silence_duration;
+			while(silence_duration > 0) {
+				uint16_t silence_block_len = silence_duration;
 				if(silence_block_len >= max_clock_ms)
 					silence_block_len = max_clock_ms;
-				pio_enqueue(cas_block_turbo ? sm_turbo : sm, silence_bit, (timing_base_clock/1000)*silence_block_len-corr);
-				pwm_silence_duration -= silence_block_len;
+				pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
+				silence_duration -= silence_block_len;
 			}
-			int i=0;
 			int bs, be, bd;
 			uint8_t b;
 			uint16_t ld;
-			while(i < to_read) {
+			for(int i=0; i < to_read; i += cas_block_multiple) {
 				switch(cas_header.signature) {
 					case cas_header_data:
-						pio_enqueue(sm, 0, cas_sample_duration);
+						pio_enqueue(0, cas_sample_duration);
 						b = sector_buffer[i];
-						for(int j=0; j!=8; j++)
-							pio_enqueue(sm, (b >> j) & 0x1, cas_sample_duration);
-						pio_enqueue(sm, 1, cas_sample_duration);
+						for(int j=0; j!=8; j++) {
+							pio_enqueue(b & 0x1, cas_sample_duration);
+							b >>= 1;
+						}
+						pio_enqueue(1, cas_sample_duration);
 						break;
 					case cas_header_fsk:
+					case cas_header_pwml:
 						ld = *(uint16_t *)&sector_buffer[i];
 						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
 						if(ld != 0) {
-							pio_enqueue(sm, cas_fsk_bit, ((timing_base_clock/10000)*ld)-n_corr-n_corr);
+							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
 						}
 						cas_fsk_bit ^= 1;
 						break;
 					case cas_header_pwmc:
 						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
 						for(uint16_t j=0; j<ld; j++) {
-							pio_enqueue(sm_turbo, pwm_bit, sector_buffer[i]*pwm_sample_duration-t_corr);
-							pio_enqueue(sm_turbo, pwm_bit^1, sector_buffer[i]*pwm_sample_duration-t_corr);
+							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
+							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
 						}
 						break;
 					case cas_header_pwmd:
@@ -760,25 +731,16 @@ void
 							bs=0; be=8; bd=1;
 						}
 						for(int j=bs; j!=be; j += bd) {
-							uint8_t d = (b >> j) & 0x1 ? cas_header.aux.aux_b.aux2 : cas_header.aux.aux_b.aux1;
-							pio_enqueue(sm_turbo, pwm_bit, d*pwm_sample_duration-t_corr);
-							pio_enqueue(sm_turbo, pwm_bit^1, d*pwm_sample_duration-t_corr);
+							uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
+							pio_enqueue(pwm_bit, d*pwm_sample_duration);
+							pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
 						}
-						break;
-					case cas_header_pwml:
-						ld = *(uint16_t *)&sector_buffer[i];
-						//ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						if(ld != 0)
-							pio_enqueue(sm_turbo, cas_fsk_bit, ld*2*pwm_sample_duration-t_corr);
-						cas_fsk_bit ^= 1;
 						break;
 					default:
 						break;
 				}
-				i += pwm_block_multiple;
 			}
-			if(pwm_block_index == cas_header.chunk_length) {
-				bool old_cas_block_turbo = cas_block_turbo;
+			if(cas_block_index == cas_header.chunk_length) {
 				if(offset < cas_size && mounts[0].mounted) {
 					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
 						offset = cas_read_forward(&fil, offset);
@@ -789,23 +751,19 @@ void
 					if(!offset)
 						mounts[0].mounted = false;
 				}
-				// TODO what about FSK?
-				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || old_cas_block_turbo^cas_block_turbo) {
-					while(!pio_sm_is_tx_fifo_empty(cas_pio, old_cas_block_turbo ? sm_turbo : sm))
+				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
 					sleep_ms(10);
 				}
 			}
-			//if(cas_header.signature == cas_header_fsk) {
-			//	gpio_set_function(uart1_tx_pin, GPIO_FUNC_UART);
-			//}
 		}
 	}
 }
 
 void core1_entry() {
-	timing_base_clock = clock_get_hz(clk_sys);
-	//timing_base_clock = 1000000;
+	//timing_base_clock = clock_get_hz(clk_sys);
+	timing_base_clock = 1000000;
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 	// max_clock_ms = (max_clock_ms/1000)*1000;
 	gpio_init(turbo_motor_pin); gpio_set_dir(turbo_motor_pin, GPIO_IN); gpio_pull_up(turbo_motor_pin);
@@ -823,13 +781,10 @@ void core1_entry() {
 	//uart_set_fifo_enabled(uart1, true);
 	//uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 
-#ifdef USE_DMA_FOR_PIO
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
-#endif
 
 	uint pio_offset = pio_add_program(cas_pio, &pin_io_program);
 
-	// TODO
 	bool set_clock_div = (clock_get_hz(clk_sys) != timing_base_clock) ? true : false;
 
  	float clk_divider = (float)clock_get_hz(clk_sys)/1000000;
@@ -860,7 +815,6 @@ void core1_entry() {
 	pio_sm_init(cas_pio, sm_turbo, pio_offset, &c1);
 	pio_sm_set_enabled(cas_pio, sm_turbo, true);
 
-#ifdef USE_DMA_FOR_PIO
 	dma_channel = dma_claim_unused_channel(true);
 	dma_channel_config dma_c = dma_channel_get_default_config(dma_channel);
 	channel_config_set_transfer_data_size(&dma_c, DMA_SIZE_32);
@@ -879,7 +833,6 @@ void core1_entry() {
 
 	irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
 	irq_set_enabled(DMA_IRQ_0, true);
-#endif
 
 	// uart_set_baudrate(uart1, 600);
 	// uart_is_readable(uart1);
