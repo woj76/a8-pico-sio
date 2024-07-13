@@ -52,6 +52,7 @@ const std::string str_press_a_4 = "USB drive...";
 const std::string str_up_dir = "../";
 const std::string str_more_files = "[Max files!]";
 const std::string str_no_media = "No media!?";
+const std::string str_config2 = "Config";
 
 std::string char_empty = " ";
 std::string char_up = "!";
@@ -545,7 +546,7 @@ cas_read_forward_exit:
 const uint joy2_p3_pin = 2;
 const uint joy2_p4_pin = 3;
 const uint joy2_p1_pin = 22;
-const uint turbo_motor_pin = 2;
+// const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
 const uint proceed_pin = 21;
@@ -557,20 +558,24 @@ const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin); // 0x00000400; 
 const uint32_t normal_motor_value_on = (1u << normal_motor_pin); // 0x00000400; // motor high
 
 // Turbo 2000 KSO - Joy 2 port, pin 3
-const uint32_t turbo_motor_pin_mask = (1u << joy2_p3_pin); // 0x00000004; // pin 2
-const uint32_t turbo_motor_value_on = (0u << joy2_p3_pin); // 0x00000000; // expect 0 for motor on
+const uint32_t kso_motor_pin_mask = (1u << joy2_p3_pin); // 0x00000004; // pin 2
+const uint32_t kso_motor_value_on = (0u << joy2_p3_pin); // 0x00000000; // expect 0 for motor on
 // Turbo 2001 / 2000F SIO - motor and command line
-//const uint32_t turbo_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin); // 0x00000C00; // pin 10 + 11
-//const uint32_t turbo_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin); // 0x00000400; // motor high, command low
+const uint32_t comm_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin); // 0x00000C00; // pin 10 + 11
+const uint32_t comm_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin); // 0x00000400; // motor high, command low
 // Same as conventional, needed for Turbo D, Turbo 6000
 //const uint32_t turbo_motor_pin_mask = normal_motor_pin_mask;
 //const uint32_t turbo_motor_value_on = normal_motor_value_on;
 // Turbo Blizzard - motor high, sio_rx low
-//const uint32_t turbo_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000420;
-//const uint32_t turbo_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000400;
+const uint32_t sio_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000420;
+const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000400;
+
+uint32_t turbo_motor_pin_mask = comm_motor_pin_mask;
+uint32_t turbo_motor_value_on = comm_motor_value_on;
+uint turbo_data_pin = sio_tx_pin;
 
 // Turbo 2000 KSO
-const uint turbo_data_pin = joy2_p4_pin; // Joy 2 port, pin 4
+// const uint turbo_data_pin = joy2_p4_pin; // Joy 2 port, pin 4
 // Turbo D
 //const uint turbo_data_pin = joy2_p1_pin; // Joy 2 port, pin 1
 // Turbo 2001 / 2000F SIO / Turbo Blizzard
@@ -766,7 +771,7 @@ void core1_entry() {
 	timing_base_clock = 1000000;
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 	// max_clock_ms = (max_clock_ms/1000)*1000;
-	gpio_init(turbo_motor_pin); gpio_set_dir(turbo_motor_pin, GPIO_IN); gpio_pull_up(turbo_motor_pin);
+	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
@@ -1179,6 +1184,220 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
+const std::string option_names[] = {
+	"Mount RdWr:",
+	"HSIO Speed:",
+	"XEX Loader:",
+	"Turbo Data:",
+	"Turbo When:",
+	"PWM Invert:",
+	"      Save      "
+};
+const int option_count = 7;
+
+uint8_t current_options[option_count] = {0};
+
+typedef struct {
+	const int count;
+	const char **short_names;
+	const char **long_names;
+} option_list;
+
+const char *mount_option_names_short[] = {"  OFF", "   ON"};
+const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
+const char *hsio_option_names_short[] = {"  $28", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
+const char *hsio_option_names_long[] = {"$28 ~19 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~80 kbit/s", " $3 ~90 kbit/s", " $2 ~100 kbit/s", " $1 ~110 kbit/s", " $0 ~128 kbit/s"};
+const char *xex_option_names_short[] = {" $700", " $400", " $500", " $600"};
+const char *xex_option_names_long[] = {"Loader at $700", "Loader at $400", "Loader at $500", "Loader at $600"};
+const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
+const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
+const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
+const char *turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
+const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
+
+const uint opt_to_turbo_data_pin[] = {sio_tx_pin, joy2_p4_pin, proceed_pin, interrupt_pin, joy2_p1_pin};
+const uint32_t opt_to_turbo_motor_pin_mask[] = {comm_motor_pin_mask, kso_motor_pin_mask, sio_motor_pin_mask, normal_motor_pin_mask};
+const uint32_t opt_to_turbo_motor_pin_val[] = {comm_motor_value_on, kso_motor_value_on, sio_motor_value_on, normal_motor_value_on};
+
+const option_list option_lists[] = {
+	{
+		.count = 2,
+		.short_names = mount_option_names_short,
+		.long_names = mount_option_names_long
+	},
+	{
+		.count = 8,
+		.short_names = hsio_option_names_short,
+		.long_names = hsio_option_names_long
+	},
+	{
+		.count = 4,
+		.short_names = xex_option_names_short,
+		.long_names = xex_option_names_long
+	},
+	{
+		.count = 5,
+		.short_names = turbo1_option_names_short,
+		.long_names = turbo1_option_names_long
+	},
+	{
+		.count = 4,
+		.short_names = turbo2_option_names_short,
+		.long_names = turbo2_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = mount_option_names_short,
+		.long_names = turbo3_option_names_long
+	}
+};
+
+
+void update_selection_entry(const char **opt_names, int i, bool erase) {
+	text_location.x = 2*8*font_scale;
+	text_location.y = (2+i)*12*font_scale;
+	if(erase) {
+		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
+		graphics.set_pen(BG); graphics.rectangle(r);
+	}
+	print_text(opt_names[i], i==cursor_position ? 16 : 0);
+}
+
+void update_selections(const char **opt_names, int opt_count) {
+	if(cursor_prev == -1) {
+		graphics.set_pen(BG);
+		graphics.clear();
+		for(int i=0; i<opt_count;i++)
+			update_selection_entry(opt_names, i, false);
+	}else{
+		int i = cursor_prev;
+		while(true) {
+			update_selection_entry(opt_names, i, true);
+			if(i == cursor_position)
+				break;
+			i = cursor_position;
+		}
+	}
+}
+
+void select_option(int opt_num) {
+	int saved_cursor_position = cursor_position;
+	cursor_prev = -1;
+	cursor_position = 0;
+
+	const char **opt_names = option_lists[opt_num].long_names;
+	int opt_count = option_lists[opt_num].count;
+	update_selections(opt_names, opt_count);
+
+	text_location.x = str_x(option_names[opt_num].length());
+	text_location.y = 4*font_scale;
+	print_text(option_names[opt_num]);
+	Rect r(text_location.x,text_location.y+10*font_scale,option_names[opt_num].length()*8*font_scale,2*font_scale);
+	graphics.set_pen(WHITE); graphics.rectangle(r);
+
+	main_buttons[0].str = &char_left;
+	update_buttons(main_buttons, main_buttons_size);
+
+	while(true) {
+		int d = menu_to_mount[cursor_position];
+		if(button_x.read() && cursor_position > 0) {
+			cursor_prev = cursor_position;
+			cursor_position--;
+			update_selections(opt_names, opt_count);
+		}else if(button_y.read() && cursor_position < opt_count-1) {
+			cursor_prev = cursor_position;
+			cursor_position++;
+			update_selections(opt_names, opt_count);
+		}else if(button_b.read()) {
+			break;
+		}else if(button_a.read()) {
+			current_options[opt_num] = cursor_position;
+			break;
+		}
+		st7789.update(&graphics);
+		sleep_ms(20);
+	}
+	cursor_position = saved_cursor_position;
+	cursor_prev = -1;
+}
+
+void update_options_entry(int i, bool erase) {
+	text_location.x = 2*8*font_scale;
+	text_location.y = (2+i)*12*font_scale;
+	if(i == option_count-1)
+		text_location.y += 4*font_scale;
+	if(erase) {
+		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
+		graphics.set_pen(BG); graphics.rectangle(r);
+	}
+	print_text(option_names[i], i==cursor_position ? option_names[i].length() : 0);
+	if(i != option_count-1) {
+		text_location.x += option_names[i].length()*8*font_scale;
+		print_text(option_lists[i].short_names[current_options[i]], i==cursor_position ? 5 : 0);
+	}
+}
+
+void update_options() {
+	if(cursor_prev == -1) {
+		graphics.set_pen(BG);
+		graphics.clear();
+		for(int i=0; i<option_count;i++)
+			update_options_entry(i, false);
+	}else{
+		int i = cursor_prev;
+		while(true) {
+			update_options_entry(i, true);
+			if(i == cursor_position)
+				break;
+			i = cursor_position;
+		}
+	}
+}
+
+void change_options() {
+	int saved_cursor_position = cursor_position;
+	cursor_prev = -1;
+	cursor_position = 0;
+
+restart_options:
+	update_options();
+	text_location.x = str_x(str_config2.length());
+	text_location.y = 4*font_scale;
+	print_text(str_config2);
+	Rect r(text_location.x,text_location.y+10*font_scale,str_config2.length()*8*font_scale,2*font_scale);
+	graphics.set_pen(WHITE); graphics.rectangle(r);
+
+	main_buttons[0].str = &char_left;
+	update_buttons(main_buttons, main_buttons_size);
+
+	while(true) {
+		if(button_x.read() && cursor_position > 0) {
+			cursor_prev = cursor_position;
+			cursor_position--;
+			update_options();
+		}else if(button_y.read() && cursor_position < option_count-1) {
+			cursor_prev = cursor_position;
+			cursor_position++;
+			update_options();
+		}else if(button_b.read()) {
+			break;
+		}else if(button_a.read()) {
+			if(cursor_position == option_count-1) {
+				// TODO Save config
+				break;
+			} else {
+				select_option(cursor_position);
+				// TODO process the new option set
+				goto restart_options;
+			}
+		}
+		st7789.update(&graphics);
+		sleep_ms(20);
+	}
+	cursor_position = saved_cursor_position;
+	cursor_prev = -1;
+}
+
 int main() {
 //	stdio_init_all();
 	// set_sys_clock_khz(250000, true);
@@ -1236,6 +1455,10 @@ int main() {
 			if(d == -1) {
 				// React to:
 				// config, rotate up, rotate down
+				if(cursor_position == 0) {
+					change_options();
+				}
+				update_main_menu();
 			}else{
 				get_file(menu_to_type[cursor_position], d);
 				update_main_menu();
