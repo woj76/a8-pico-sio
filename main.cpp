@@ -563,25 +563,25 @@ const uint interrupt_pin = 26;
 const uint sio_tx_pin = 4;
 const uint sio_rx_pin = 5;
 
-const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin); // 0x00000400; // pin 10
-const uint32_t normal_motor_value_on = (1u << normal_motor_pin); // 0x00000400; // motor high
+// Conventional SIO, but also Turbo D & Turbo 6000
+const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin);
+const uint32_t normal_motor_value_on = (1u << normal_motor_pin);
 
-// Turbo 2000 KSO - Joy 2 port, pin 3
-const uint32_t kso_motor_pin_mask = (1u << joy2_p3_pin); // 0x00000004; // pin 2
-const uint32_t kso_motor_value_on = (0u << joy2_p3_pin); // 0x00000000; // expect 0 for motor on
-// Turbo 2001 / 2000F SIO - motor and command line
-const uint32_t comm_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin); // 0x00000C00; // pin 10 + 11
-const uint32_t comm_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin); // 0x00000400; // motor high, command low
-// Same as conventional, needed for Turbo D, Turbo 6000
-//const uint32_t turbo_motor_pin_mask = normal_motor_pin_mask;
-//const uint32_t turbo_motor_value_on = normal_motor_value_on;
-// Turbo Blizzard - motor high, sio_rx low
-const uint32_t sio_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000420;
-const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000400;
+// Turbo 2000 KSO - Joy 2 port
+const uint32_t kso_motor_pin_mask = (1u << joy2_p3_pin);
+const uint32_t kso_motor_value_on = (0u << joy2_p3_pin);
 
-uint32_t turbo_motor_pin_mask; // = comm_motor_pin_mask;
-uint32_t turbo_motor_value_on; // = comm_motor_value_on;
-uint turbo_data_pin; // = sio_tx_pin;
+// Turbo 2001 / 2000F and sorts over SIO data
+const uint32_t comm_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin);
+const uint32_t comm_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin);
+
+// Turbo Blizzard - SIO Data Out
+const uint32_t sio_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin);
+const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin);
+
+uint32_t turbo_motor_pin_mask;
+uint32_t turbo_motor_value_on;
+uint turbo_data_pin;
 
 // Turbo 2000 KSO
 // const uint turbo_data_pin = joy2_p4_pin; // Joy 2 port, pin 4
@@ -622,13 +622,13 @@ void check_turbo_conf() {
 	turbo_conf[2] = current_options[5];
 }
 
-
 volatile bool dma_block_turbo;
 volatile bool dma_going = false;
 int dma_channel, dma_channel_turbo;
 
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
+// 16*8 also fails sometimes with the 1MHz base clock
 const int pio_queue_size = 32*8;
 
 uint32_t pio_e;
@@ -807,7 +807,7 @@ void core1_entry() {
 	//timing_base_clock = clock_get_hz(clk_sys);
 	timing_base_clock = 1000000;
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
-	// max_clock_ms = (max_clock_ms/1000)*1000;
+
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
@@ -825,9 +825,6 @@ void core1_entry() {
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
-
-	// bool set_clock_div = (clock_get_hz(clk_sys) != timing_base_clock) ? true : false;
-
  	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
 
 	sm = pio_claim_unused_sm(cas_pio, true);
@@ -835,7 +832,6 @@ void core1_entry() {
 	pio_sm_set_consecutive_pindirs(cas_pio, sm, sio_tx_pin, 1, true);
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-	// if(set_clock_div)
 	sm_config_set_clkdiv(&c, clk_divider);
 	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_pins(&c, sio_tx_pin, 1);
@@ -896,6 +892,7 @@ const menu_entry menu_entries[] = {
 	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
 	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
 	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()}
+	// TODO Make this a nice About... screen
 	//{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
 };
 const size_t menu_entry_size = 8;
@@ -976,7 +973,6 @@ void update_main_menu() {
 
 	}
 }
-
 
 std::string str_fit(13,' ');
 
@@ -1217,7 +1213,6 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
-
 typedef struct {
 	const int count;
 	const char **short_names;
@@ -1406,6 +1401,7 @@ restart_options:
 			} else {
 				select_option(cursor_position);
 				// TODO process the new option set
+				// For turbo this is done elsewhere
 				goto restart_options;
 			}
 		}
