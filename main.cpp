@@ -243,6 +243,18 @@ bool repeating_timer_directory(struct repeating_timer *t) {
 	return true;
 }
 
+const std::string option_names[] = {
+	"Mount RdWr:",
+	"HSIO Speed:",
+	"XEX Loader:",
+	"Turbo Data:",
+	"Turbo When:",
+	"PWM Invert:",
+	"      Save      "
+};
+const int option_count = 7;
+
+uint8_t current_options[option_count] = {0};
 char curr_path[256] = {0};
 size_t num_files;
 
@@ -540,13 +552,10 @@ cas_read_forward_exit:
 	return offset;
 }
 
-// TODO Different turbo configurations in the menu
-
 // const uint turbo_data_pin = 25; // LED=25 for testing
 const uint joy2_p3_pin = 2;
 const uint joy2_p4_pin = 3;
 const uint joy2_p1_pin = 22;
-// const uint turbo_motor_pin = 2;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
 const uint proceed_pin = 21;
@@ -570,9 +579,9 @@ const uint32_t comm_motor_value_on = (0u << command_line_pin) | (1u << normal_mo
 const uint32_t sio_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000420;
 const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin); // 0x00000400;
 
-uint32_t turbo_motor_pin_mask = comm_motor_pin_mask;
-uint32_t turbo_motor_value_on = comm_motor_value_on;
-uint turbo_data_pin = sio_tx_pin;
+uint32_t turbo_motor_pin_mask; // = comm_motor_pin_mask;
+uint32_t turbo_motor_value_on; // = comm_motor_value_on;
+uint turbo_data_pin; // = sio_tx_pin;
 
 // Turbo 2000 KSO
 // const uint turbo_data_pin = joy2_p4_pin; // Joy 2 port, pin 4
@@ -586,6 +595,33 @@ uint turbo_data_pin = sio_tx_pin;
 //const uint turbo_data_pin = interrupt_pin;
 
 const PIO cas_pio = pio0;
+uint sm, sm_turbo;
+pio_sm_config sm_config_turbo;
+int8_t turbo_conf[] = {-1, -1, -1};
+uint pio_offset;
+const uint opt_to_turbo_data_pin[] = {sio_tx_pin, joy2_p4_pin, proceed_pin, interrupt_pin, joy2_p1_pin};
+const uint32_t opt_to_turbo_motor_pin_mask[] = {comm_motor_pin_mask, kso_motor_pin_mask, sio_motor_pin_mask, normal_motor_pin_mask};
+const uint32_t opt_to_turbo_motor_pin_val[] = {comm_motor_value_on, kso_motor_value_on, sio_motor_value_on, normal_motor_value_on};
+
+void check_turbo_conf() {
+	if(turbo_conf[0] != current_options[3]) {
+		if(turbo_conf[0] >= 0) {
+			pio_sm_set_enabled(cas_pio, sm_turbo, false);
+		}
+		turbo_conf[0] = current_options[3];
+		turbo_data_pin = opt_to_turbo_data_pin[turbo_conf[0]];
+		pio_gpio_init(cas_pio, turbo_data_pin);
+		sm_config_set_out_pins(&sm_config_turbo, turbo_data_pin, 1);
+		pio_sm_set_consecutive_pindirs(cas_pio, sm_turbo, turbo_data_pin, 1, true);
+		pio_sm_init(cas_pio, sm_turbo, pio_offset, &sm_config_turbo);
+		pio_sm_set_enabled(cas_pio, sm_turbo, true);
+	}
+	turbo_conf[1] = current_options[4];
+	turbo_motor_pin_mask = opt_to_turbo_motor_pin_mask[turbo_conf[1]];
+	turbo_motor_value_on = opt_to_turbo_motor_pin_val[turbo_conf[1]];
+	turbo_conf[2] = current_options[5];
+}
+
 
 volatile bool dma_block_turbo;
 volatile bool dma_going = false;
@@ -593,7 +629,7 @@ int dma_channel, dma_channel_turbo;
 
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
-const int pio_queue_size = 16*8;
+const int pio_queue_size = 32*8;
 
 uint32_t pio_e;
 
@@ -610,7 +646,7 @@ void dma_handler() {
 }
 
 void pio_enqueue(uint8_t b, uint32_t d) {
-	uint32_t e = (b | ((d - pio_prog_cycle_corr) << 1));
+	uint32_t e = (b^(cas_block_turbo ? turbo_conf[2] : 0) | ((d - pio_prog_cycle_corr) << 1));
 	queue_add_blocking(&pio_queue, &e);
 	if(!dma_going) {
 		dma_block_turbo = cas_block_turbo;
@@ -636,6 +672,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(!i) {
+				check_turbo_conf();
 				cas_sample_duration = timing_base_clock/600;
 				if(f_mount(&fatfs, "", 1) != FR_OK)
 					break;
@@ -774,7 +811,6 @@ void core1_entry() {
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
-
 	gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
 	// gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
 	// gpio_set_function(turbo_data_pin, GPIO_FUNC_SIO);
@@ -788,37 +824,34 @@ void core1_entry() {
 
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
 
-	uint pio_offset = pio_add_program(cas_pio, &pin_io_program);
+	pio_offset = pio_add_program(cas_pio, &pin_io_program);
 
-	bool set_clock_div = (clock_get_hz(clk_sys) != timing_base_clock) ? true : false;
+	// bool set_clock_div = (clock_get_hz(clk_sys) != timing_base_clock) ? true : false;
 
- 	float clk_divider = (float)clock_get_hz(clk_sys)/1000000;
+ 	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
 
-	uint sm = pio_claim_unused_sm(cas_pio, true);
+	sm = pio_claim_unused_sm(cas_pio, true);
 	pio_gpio_init(cas_pio, sio_tx_pin);
 	pio_sm_set_consecutive_pindirs(cas_pio, sm, sio_tx_pin, 1, true);
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-	if(set_clock_div)
-		sm_config_set_clkdiv(&c, clk_divider);
+	// if(set_clock_div)
+	sm_config_set_clkdiv(&c, clk_divider);
 	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_pins(&c, sio_tx_pin, 1);
 	sm_config_set_out_shift(&c, true, true, 32);
 	pio_sm_init(cas_pio, sm, pio_offset, &c);
 	pio_sm_set_enabled(cas_pio, sm, true);
 
-	uint sm_turbo = pio_claim_unused_sm(cas_pio, true);
-	pio_gpio_init(cas_pio, turbo_data_pin);
-	pio_sm_set_consecutive_pindirs(cas_pio, sm_turbo, turbo_data_pin, 1, true);
-	pio_sm_config c1 = pin_io_program_get_default_config(pio_offset);
-	sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
-	if(set_clock_div)
-		sm_config_set_clkdiv(&c1, clk_divider);
+	sm_turbo = pio_claim_unused_sm(cas_pio, true);
+
+	sm_config_turbo = pin_io_program_get_default_config(pio_offset);
+	sm_config_set_fifo_join(&sm_config_turbo, PIO_FIFO_JOIN_TX);
+	// if(set_clock_div)
+	sm_config_set_clkdiv(&sm_config_turbo, clk_divider);
+	sm_config_set_out_shift(&sm_config_turbo, true, true, 32);
 	// sm_config_set_set_pins(&c1, turbo_data_pin, 1);
-	sm_config_set_out_pins(&c1, turbo_data_pin, 1);
-	sm_config_set_out_shift(&c1, true, true, 32);
-	pio_sm_init(cas_pio, sm_turbo, pio_offset, &c1);
-	pio_sm_set_enabled(cas_pio, sm_turbo, true);
+	check_turbo_conf();
 
 	dma_channel = dma_claim_unused_channel(true);
 	dma_channel_config dma_c = dma_channel_get_default_config(dma_channel);
@@ -1184,18 +1217,6 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
-const std::string option_names[] = {
-	"Mount RdWr:",
-	"HSIO Speed:",
-	"XEX Loader:",
-	"Turbo Data:",
-	"Turbo When:",
-	"PWM Invert:",
-	"      Save      "
-};
-const int option_count = 7;
-
-uint8_t current_options[option_count] = {0};
 
 typedef struct {
 	const int count;
@@ -1214,10 +1235,6 @@ const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO
 const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
 const char *turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
 const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
-
-const uint opt_to_turbo_data_pin[] = {sio_tx_pin, joy2_p4_pin, proceed_pin, interrupt_pin, joy2_p1_pin};
-const uint32_t opt_to_turbo_motor_pin_mask[] = {comm_motor_pin_mask, kso_motor_pin_mask, sio_motor_pin_mask, normal_motor_pin_mask};
-const uint32_t opt_to_turbo_motor_pin_val[] = {comm_motor_value_on, kso_motor_value_on, sio_motor_value_on, normal_motor_value_on};
 
 const option_list option_lists[] = {
 	{
@@ -1283,7 +1300,7 @@ void update_selections(const char **opt_names, int opt_count) {
 void select_option(int opt_num) {
 	int saved_cursor_position = cursor_position;
 	cursor_prev = -1;
-	cursor_position = 0;
+	cursor_position = current_options[opt_num];
 
 	const char **opt_names = option_lists[opt_num].long_names;
 	int opt_count = option_lists[opt_num].count;
@@ -1355,9 +1372,10 @@ void update_options() {
 }
 
 void change_options() {
+	static int old_option_cursor = 0;
 	int saved_cursor_position = cursor_position;
 	cursor_prev = -1;
-	cursor_position = 0;
+	cursor_position = old_option_cursor;
 
 restart_options:
 	update_options();
@@ -1394,6 +1412,7 @@ restart_options:
 		st7789.update(&graphics);
 		sleep_ms(20);
 	}
+	old_option_cursor = cursor_position == (option_count - 1) ? 0 : cursor_position;
 	cursor_position = saved_cursor_position;
 	cursor_prev = -1;
 }
