@@ -42,6 +42,8 @@
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
 
+#define PICO_UART
+
 const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
@@ -431,7 +433,7 @@ volatile mounts_type mounts[] = {
   // otherwise, check if command line low and serial read waiting, act accordingly
 */
 
-char sector_buffer[512];
+uint8_t sector_buffer[512];
 
 const uint32_t cas_header_FUJI = 0x494A5546;
 const uint32_t cas_header_baud = 0x64756162;
@@ -466,6 +468,23 @@ uint16_t dsk_baudrate = 19200;
 uint8_t cas_fsk_bit;
 
 volatile bool cas_block_turbo;
+
+typedef struct __attribute__((__packed__)) {
+	uint16_t magic;
+	uint16_t pars;
+	uint16_t sec_size;
+	uint8_t pars_high;
+	uint32_t crc;
+	uint32_t _unused;
+	uint8_t flags;
+} atr_header_type;
+
+typedef union {
+	atr_header_type atr_header;
+	// atx_header_type atx_header;
+} disk_header_type;
+
+disk_header_type disk_headers[4];
 
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	UINT bytes_read;
@@ -663,20 +682,50 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 }
 */
 
+// byte0 = drive
+// byte4 = correct cs
+// byte1 = read sector 'R'
+// byte2+3 = sector number
+
+typedef struct __attribute__((__packed__)) {
+	uint8_t device_id;
+	uint8_t command_id;
+	uint16_t sector_number;
+	uint8_t checksum;
+} sio_command_type;
+
+sio_command_type sio_command;
+
+uint8_t sio_checksum(uint8_t *data, size_t len) {
+	uint8_t cksum = 0;
+	uint16_t nck;
+
+	for (int i = 0; i < len; i++) {
+		nck = cksum + data[i];
+		cksum = (nck > 0x00ff) ? 1 : 0;
+		cksum += (nck & 0x00ff);
+	}
+	return cksum;
+}
+
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
 	UINT bytes_read;
+	FSIZE_t offset;
+	FSIZE_t to_read;
+	FRESULT f_stat;
+
 	while(true) {
 		for(int i=0; i<5; i++) {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
-			if(!i) {
-				check_turbo_conf();
-				cas_sample_duration = timing_base_clock/600;
-				if(f_mount(&fatfs, "", 1) != FR_OK)
-					break;
-				if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+			if(f_mount(&fatfs, "", 1) != FR_OK)
+				break;
+			if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+				if(!i) {
+					check_turbo_conf();
+					cas_sample_duration = timing_base_clock/600;
 					cas_size = f_size(&fil);
 					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI) {
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
@@ -687,116 +736,196 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					}else{
 						led.set_rgb(0,255,0);
 					}
-					f_close(&fil);
+				} else {
+					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
+					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
+						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) >> 4;
+						led.set_rgb(0,255,0);
+					}else{
+						led.set_rgb(255,0,0);
+						mounts[i].status = 0;
+						mounts[i].mounted = false;
+					}
 				}
-				f_mount(0, "", 1);
-			}else {
-				break; // TODO skip disks for now
+				f_close(&fil);
 			}
+			f_mount(0, "", 1);
 		}
 
-		FSIZE_t offset = mounts[0].status;
-		if(mounts[0].mounted && offset && offset < cas_size &&
-			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
-				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
-			FSIZE_t to_read = 0;
-			FRESULT f_stat;
-			do {
-				if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
-					break;
-				if((f_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
-					break;
-				if((f_stat = f_lseek(&fil, offset)) != FR_OK)
-					break;
-				to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
-				if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
-					break;
-				if(bytes_read != to_read) {
-					f_stat = FR_INT_ERR;
-					break;
-				}
-				offset += to_read;
-				cas_block_index += to_read;
-			}while(false);
-			f_close(&fil);
-			f_mount(0, "", 1);
-			if(f_stat == FR_OK) {
-				mounts[0].status = offset;
+		// uart_is_readable(uart1);
+		// uart_write_blocking(uart1, uint8_t *, size t);
+		// uart_read_blocking(uart1, uint8_t *, size t);
+		// *dst++ = (uint8_t) uart_get_hw(uart)->dr;
+		// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
+
+		if(gpio_get(command_line_pin) == 0 && uart_is_readable(uart1)) {
+			int i;
+			for(i=0; i<5 && uart_is_readable_within_us(uart1, 2500); i++) {
+				((uint8_t *)&sio_command)[i] = (uint8_t) uart_get_hw(uart1)->dr;
+			}
+			if(i != 5) {
+				led.set_rgb(255, 255, 255);
+			}else if(sio_command.device_id != 0x31 || !(sio_command.command_id == 'R' || sio_command.command_id == 'S')) {
+				led.set_rgb(255, 255, 0);
+			}else if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || !mounts[sio_command.device_id-0x30].mounted
+			    || !mounts[sio_command.device_id-0x30].status) {
+					while (!gpio_get(command_line_pin))
+						tight_loop_contents();
+					sleep_us(100); // 100, 500
+					uart_putc_raw(uart1, 'N');
+					led.set_rgb(255, 0, 0);
 			} else {
-				mounts[0].mounted = false;
-				mounts[0].status = 0;
-				continue;
-			}
-			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
-			while(silence_duration > 0) {
-				uint16_t silence_block_len = silence_duration;
-				if(silence_block_len >= max_clock_ms)
-					silence_block_len = max_clock_ms;
-				pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
-				silence_duration -= silence_block_len;
-			}
-			int bs, be, bd;
-			uint8_t b;
-			uint16_t ld;
-			for(int i=0; i < to_read; i += cas_block_multiple) {
-				switch(cas_header.signature) {
-					case cas_header_data:
-						pio_enqueue(0, cas_sample_duration);
-						b = sector_buffer[i];
-						for(int j=0; j!=8; j++) {
-							pio_enqueue(b & 0x1, cas_sample_duration);
-							b >>= 1;
+				while (!gpio_get(command_line_pin))
+					tight_loop_contents();
+				sleep_us(100); //
+				uart_putc_raw(uart1, 'A');
+				led.set_rgb(0, 0, 255);
+				int drive_number = sio_command.device_id-0x30; // TODO any bits to clear, also above?
+				if(sio_command.command_id == 'S') {
+					to_read = 4;
+					sector_buffer[0] = 0x18; // motor on, read only
+					sector_buffer[1] = 0xFF;
+					sector_buffer[2] = 0xe0;
+					sector_buffer[3] = 0x0;
+					f_stat = FR_OK;
+				} else {
+					to_read = disk_headers[drive_number-1].atr_header.sec_size;
+					do {
+						if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+							break;
+						if((f_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
+							break;
+						// TODO the sector numbering logic is a bit more complex for sector sizes != 128
+						if((f_stat = f_lseek(&fil, sizeof(atr_header_type)+to_read*(sio_command.sector_number-1))) != FR_OK)
+							break;
+						if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+							break;
+						if(bytes_read != to_read) {
+							f_stat = FR_INT_ERR;
+							break;
 						}
-						pio_enqueue(1, cas_sample_duration);
-						break;
-					case cas_header_fsk:
-					case cas_header_pwml:
-						ld = *(uint16_t *)&sector_buffer[i];
-						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						if(ld != 0) {
-							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
-						}
-						cas_fsk_bit ^= 1;
-						break;
-					case cas_header_pwmc:
-						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
-						for(uint16_t j=0; j<ld; j++) {
-							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
-							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
-						}
-						break;
-					case cas_header_pwmd:
-						b = sector_buffer[i];
-						if (pwm_bit_order) {
-							bs=7; be=-1; bd=-1;
-						} else {
-							bs=0; be=8; bd=1;
-						}
-						for(int j=bs; j!=be; j += bd) {
-							uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
-							pio_enqueue(pwm_bit, d*pwm_sample_duration);
-							pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
-						}
-						break;
-					default:
-						break;
-				}
-			}
-			if(cas_block_index == cas_header.chunk_length) {
-				if(offset < cas_size && mounts[0].mounted) {
-					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
-						offset = cas_read_forward(&fil, offset);
-					}
+					}while(false);
 					f_close(&fil);
 					f_mount(0, "", 1);
-					mounts[0].status = offset;
-					if(!offset)
-						mounts[0].mounted = false;
 				}
-				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
-					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
-						tight_loop_contents();
-					sleep_ms(10);
+				uart_tx_wait_blocking(uart1);
+				sleep_us(300);
+				if(f_stat == FR_OK) {
+					uart_putc_raw(uart1, 'C');
+					uart_tx_wait_blocking(uart1);
+					sleep_us(150);
+					uart_write_blocking(uart1, sector_buffer, to_read);
+					uart_putc_raw(uart1, sio_checksum(sector_buffer, to_read));
+				} else {
+					uart_putc_raw(uart1, 'E');
+					led.set_rgb(255,0,0);
+				}
+				uart_tx_wait_blocking(uart1);
+				// check sector out of range and file read status? TODO implicit in trying to read the file with lseek
+			}
+		} else {
+			offset = mounts[0].status;
+			if(mounts[0].mounted && offset && offset < cas_size &&
+				(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
+					(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
+				to_read = 0;
+				do {
+					if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+						break;
+					if((f_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
+						break;
+					if((f_stat = f_lseek(&fil, offset)) != FR_OK)
+						break;
+					to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
+					if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+						break;
+					if(bytes_read != to_read) {
+						f_stat = FR_INT_ERR;
+						break;
+					}
+					offset += to_read;
+					cas_block_index += to_read;
+				}while(false);
+				f_close(&fil);
+				f_mount(0, "", 1);
+				if(f_stat == FR_OK) {
+					mounts[0].status = offset;
+				} else {
+					mounts[0].mounted = false;
+					mounts[0].status = 0;
+					continue;
+				}
+				uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
+				while(silence_duration > 0) {
+					uint16_t silence_block_len = silence_duration;
+					if(silence_block_len >= max_clock_ms)
+						silence_block_len = max_clock_ms;
+					pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
+					silence_duration -= silence_block_len;
+				}
+				int bs, be, bd;
+				uint8_t b;
+				uint16_t ld;
+				for(int i=0; i < to_read; i += cas_block_multiple) {
+					switch(cas_header.signature) {
+						case cas_header_data:
+							pio_enqueue(0, cas_sample_duration);
+							b = sector_buffer[i];
+							for(int j=0; j!=8; j++) {
+								pio_enqueue(b & 0x1, cas_sample_duration);
+								b >>= 1;
+							}
+							pio_enqueue(1, cas_sample_duration);
+							break;
+						case cas_header_fsk:
+						case cas_header_pwml:
+							ld = *(uint16_t *)&sector_buffer[i];
+							// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
+							if(ld != 0) {
+								pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
+							}
+							cas_fsk_bit ^= 1;
+							break;
+						case cas_header_pwmc:
+							ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
+							for(uint16_t j=0; j<ld; j++) {
+								pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
+								pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
+							}
+							break;
+						case cas_header_pwmd:
+							b = sector_buffer[i];
+							if (pwm_bit_order) {
+								bs=7; be=-1; bd=-1;
+							} else {
+								bs=0; be=8; bd=1;
+							}
+							for(int j=bs; j!=be; j += bd) {
+								uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
+								pio_enqueue(pwm_bit, d*pwm_sample_duration);
+								pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
+							}
+							break;
+						default:
+							break;
+					}
+				}
+				if(cas_block_index == cas_header.chunk_length) {
+					if(offset < cas_size && mounts[0].mounted) {
+						if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+							offset = cas_read_forward(&fil, offset);
+						}
+						f_close(&fil);
+						f_mount(0, "", 1);
+						mounts[0].status = offset;
+						if(!offset)
+							mounts[0].mounted = false;
+					}
+					if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+						while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
+							tight_loop_contents();
+						sleep_ms(10);
+					}
 				}
 			}
 		}
@@ -811,16 +940,7 @@ void core1_entry() {
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
-	gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
-	// gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
 	// gpio_set_function(turbo_data_pin, GPIO_FUNC_SIO);
-
-	//uart_init(uart1, dsk_baudrate);
-	//gpio_set_function(uart1_tx_pin, GPIO_FUNC_UART);
-	//gpio_set_function(uart1_rx_pin, GPIO_FUNC_UART);
-	//uart_set_hw_flow(uart1, false, false);
-	//uart_set_fifo_enabled(uart1, true);
-	//uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
 
@@ -868,12 +988,17 @@ void core1_entry() {
 	irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
 	irq_set_enabled(DMA_IRQ_0, true);
 
-	// uart_set_baudrate(uart1, 600);
-	// uart_is_readable(uart1);
-	// uart_write_blocking(uart1, uint8_t *, size t);
-	// uart_read_blocking(uart1, uint8_t *, size t);
-	// *dst++ = (uint8_t) uart_get_hw(uart)->dr;
-	// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
+	//gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
+	//gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
+#ifdef PICO_UART
+	uart_init(uart1, dsk_baudrate);
+	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
+	gpio_set_function(sio_rx_pin, GPIO_FUNC_UART);
+	uart_set_hw_flow(uart1, false, false);
+	uart_set_fifo_enabled(uart1, true);
+	uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
+#endif
+
 	main_sio_loop(sm, sm_turbo);
 }
 
@@ -1414,7 +1539,7 @@ restart_options:
 }
 
 int main() {
-//	stdio_init_all();
+	// stdio_init_all();
 	// set_sys_clock_khz(250000, true);
 	led.set_rgb(0, 0, 0);
 	st7789.set_backlight(255);
