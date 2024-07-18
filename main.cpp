@@ -727,30 +727,16 @@ bool try_get_sio_command() {
 	} else if(sio_command.device_id < 0x31 || sio_command.device_id > 0x34) {
 		r = false;
 	}
+	// TODO Add timeout to this? To avoid (unlikely) infinite hang?
+	// Check Altirra HW manual for how long it should be.
 	while (!gpio_get(command_line_pin))
 		tight_loop_contents();
 	return r;
 }
-/*
-To check for transmission errors
-	uart_get_hw(uart1)->rsr != 0
-To clear them:
-	hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
-*/
 
-// On transmission errors, incomplete frame, checksum error:
-//	ignore, switch HSIO speed
-// Not for our device 0x31-0x34 -> ignore
-// Otherwise report 'E' later on if something is not right and set sector status
-// for getStatus command
-// Correct command -> forward to a procedure to serve
 // for not mounted drives report motor on but no disk (drive always present,
 // not only when the disk is in, or???)
-// mount table needs space for the sector status
 // mounted == motor_on
-// readonly bit -> readonly ATR or readonly file
-
-
 
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
@@ -811,9 +797,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
 		if(try_get_sio_command()) {
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
+#ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
+#endif
 			memset(sector_buffer, 0, 512);
-			int drive_number = sio_command.device_id-0x30; // TODO any bits to clear?
+			int drive_number = sio_command.device_id-0x30;
 			f_op_stat = FR_OK;
 			uint8_t r = 'A';
 			switch(sio_command.command_id) {
@@ -829,6 +817,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'R':
 					// TODO preverify sector number and ATR size?
+					// set sector status byte?
+					// how does the SDrive do it?
+					// Check for sector size 0?
 					uart_putc_raw(uart1, r);
 					do {
 						if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
@@ -874,7 +865,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				uart_tx_wait_blocking(uart1);
 			}
-			// TODO if the command was getspeed, change the baudrate now, drain queue first
+			if(sio_command.command_id == 0x3F) {
+				// TODO if the command was getspeed, change the baudrate now, drain queue first
+			}
 		} else {
 			offset = mounts[0].status;
 			if(mounts[0].mounted && offset && offset < cas_size &&
@@ -902,7 +895,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				f_mount(0, "", 1);
 				if(f_op_stat == FR_OK) {
 					mounts[0].status = offset;
+#ifdef PICO_UART
 					gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
+#endif
 				} else {
 					mounts[0].mounted = false;
 					mounts[0].status = 0;
