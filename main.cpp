@@ -475,7 +475,7 @@ typedef struct __attribute__((__packed__)) {
 	uint16_t sec_size;
 	uint8_t pars_high;
 	uint32_t crc;
-	uint32_t _unused;
+	uint8_t temp1, temp2, temp3, temp4;
 	uint8_t flags;
 } atr_header_type;
 
@@ -755,16 +755,19 @@ To clear them:
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
+	FILINFO fil_info;
 	UINT bytes_read;
 	FSIZE_t offset;
 	FSIZE_t to_read;
-	FRESULT f_stat;
+	FRESULT f_op_stat;
 
 	while(true) {
 		for(int i=0; i<5; i++) {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(f_mount(&fatfs, "", 1) != FR_OK)
+				break;
+			if(f_stat((const char *)mounts[i].mount_path, &fil_info) != FR_OK)
 				break;
 			if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
@@ -783,9 +786,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				} else {
 					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
-						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) >> 4;
-						// TODO Alternatively store this in the unused part of the ATR header
-						mounts[i].status |= 0xFF000000;
+						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
+						disk_headers[i-1].atr_header.temp1 = 0xFF;
+						// Whatever the ATR flag says, if the file itself is read-only,
+						// so is the ATR disk.
+						if(fil_info.fattrib & AM_RDO)
+							disk_headers[i-1].atr_header.flags |= 0x1;
 						led.set_rgb(0,255,0);
 					} else {
 						led.set_rgb(255,0,0);
@@ -805,16 +811,19 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
 		if(try_get_sio_command()) {
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
+			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
+			memset(sector_buffer, 0, 512);
 			int drive_number = sio_command.device_id-0x30; // TODO any bits to clear?
-			f_stat = FR_OK;
+			f_op_stat = FR_OK;
 			uint8_t r = 'A';
 			switch(sio_command.command_id) {
 				case 'S':
 					uart_putc_raw(uart1, r);
 					to_read = 4;
 					// check for mounted and read only flag, and ...?
+					// TODO motor on only after first actual disk operation?
 					sector_buffer[0] = 0x18; // motor on, read only
-					sector_buffer[1] = (mounts[drive_number].status >> 24) & 0xFF;
+					sector_buffer[1] = disk_headers[drive_number-1].atr_header.temp1;
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
 					break;
@@ -822,29 +831,30 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// TODO preverify sector number and ATR size?
 					uart_putc_raw(uart1, r);
 					do {
-						if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+						if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 							break;
-						if((f_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
+						if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
 							break;
 						// TODO the sector numbering logic is a bit more complex for sector sizes != 128
 						to_read = disk_headers[drive_number-1].atr_header.sec_size;
-						if((f_stat = f_lseek(&fil, sizeof(atr_header_type)+to_read*(sio_command.sector_number-1))) != FR_OK)
+						if((f_op_stat = f_lseek(&fil, sizeof(atr_header_type)+to_read*(sio_command.sector_number-1))) != FR_OK)
 							break;
-						if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+						if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
 							break;
 						if(bytes_read != to_read) {
-							f_stat = FR_INT_ERR;
+							f_op_stat = FR_INT_ERR;
 							break;
 						}
 					}while(false);
 					f_close(&fil);
 					f_mount(0, "", 1);
-					if(f_stat != FR_OK) {
-						// TODO set also status byte
+					if(f_op_stat != FR_OK) {
+						// TODO set also sector status byte -> no record found or what?
 						// Alternatively, check the availability of data first,
 						// and send NACK if there is none.
 						to_read = 128;
-						memset(sector_buffer, 0, to_read);
+					} else {
+						// TODO clear sector status byte
 					}
 					break;
 				default:
@@ -855,18 +865,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			if(r == 'A') {
 				uart_tx_wait_blocking(uart1);
 				sleep_us(300); // Again, timeout mentioned by atari_drive_emulator.c
-				if(f_stat == FR_OK)
-					uart_putc_raw(uart1, 'C');
-				else
-					uart_putc_raw(uart1, 'E');
+				uart_putc_raw(uart1, f_op_stat == FR_OK ? 'C' : 'E');
 				if(to_read) {
 					uart_tx_wait_blocking(uart1);
 					sleep_us(150); // Another one from atari_drive_emulator.c
 					uart_write_blocking(uart1, sector_buffer, to_read);
 					uart_putc_raw(uart1, sio_checksum(sector_buffer, to_read));
 				}
-				// uart_tx_wait_blocking(uart1);
+				uart_tx_wait_blocking(uart1);
 			}
+			// TODO if the command was getspeed, change the baudrate now, drain queue first
 		} else {
 			offset = mounts[0].status;
 			if(mounts[0].mounted && offset && offset < cas_size &&
@@ -874,17 +882,17 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
 				to_read = 0;
 				do {
-					if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+					if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 						break;
-					if((f_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
+					if((f_op_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
 						break;
-					if((f_stat = f_lseek(&fil, offset)) != FR_OK)
+					if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
 						break;
 					to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
-					if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+					if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
 						break;
 					if(bytes_read != to_read) {
-						f_stat = FR_INT_ERR;
+						f_op_stat = FR_INT_ERR;
 						break;
 					}
 					offset += to_read;
@@ -892,8 +900,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}while(false);
 				f_close(&fil);
 				f_mount(0, "", 1);
-				if(f_stat == FR_OK) {
+				if(f_op_stat == FR_OK) {
 					mounts[0].status = offset;
+					gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
 				} else {
 					mounts[0].mounted = false;
 					mounts[0].status = 0;
