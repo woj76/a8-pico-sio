@@ -708,6 +708,50 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 	return cksum;
 }
 
+bool try_get_sio_command() {
+	if(gpio_get(command_line_pin) == 1)
+		return false;
+	bool r = true;
+	int i = 0;
+	memset(&sio_command, 0x00, 4);
+	sio_command.checksum = 0xFF;
+	if(uart_is_readable(uart1)) {
+		// TODO the 2.5 ms timeout dep current SIO speed?
+		for(i=0; i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr; i++)
+			((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
+	}
+	if(uart_get_hw(uart1)->rsr || i != 5 || sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum) {
+		// TODO switch SIO speed
+		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
+		r = false;
+	} else if(sio_command.device_id < 0x31 || sio_command.device_id > 0x34) {
+		r = false;
+	}
+	while (!gpio_get(command_line_pin))
+		tight_loop_contents();
+	return r;
+}
+/*
+To check for transmission errors
+	uart_get_hw(uart1)->rsr != 0
+To clear them:
+	hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
+*/
+
+// On transmission errors, incomplete frame, checksum error:
+//	ignore, switch HSIO speed
+// Not for our device 0x31-0x34 -> ignore
+// Otherwise report 'E' later on if something is not right and set sector status
+// for getStatus command
+// Correct command -> forward to a procedure to serve
+// for not mounted drives report motor on but no disk (drive always present,
+// not only when the disk is in, or???)
+// mount table needs space for the sector status
+// mounted == motor_on
+// readonly bit -> readonly ATR or readonly file
+
+
+
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
@@ -740,8 +784,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
 						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) >> 4;
+						// TODO Alternatively store this in the unused part of the ATR header
+						mounts[i].status |= 0xFF000000;
 						led.set_rgb(0,255,0);
-					}else{
+					} else {
 						led.set_rgb(255,0,0);
 						mounts[i].status = 0;
 						mounts[i].mounted = false;
@@ -757,45 +803,31 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		// uart_read_blocking(uart1, uint8_t *, size t);
 		// *dst++ = (uint8_t) uart_get_hw(uart)->dr;
 		// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
-
-		if(gpio_get(command_line_pin) == 0 && uart_is_readable(uart1)) {
-			int i;
-			for(i=0; i<5 && uart_is_readable_within_us(uart1, 2500); i++) {
-				((uint8_t *)&sio_command)[i] = (uint8_t) uart_get_hw(uart1)->dr;
-			}
-			if(i != 5) {
-				led.set_rgb(255, 255, 255);
-			}else if(sio_command.device_id != 0x31 || !(sio_command.command_id == 'R' || sio_command.command_id == 'S')) {
-				led.set_rgb(255, 255, 0);
-			}else if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || !mounts[sio_command.device_id-0x30].mounted
-			    || !mounts[sio_command.device_id-0x30].status) {
-					while (!gpio_get(command_line_pin))
-						tight_loop_contents();
-					sleep_us(100); // 100, 500
-					uart_putc_raw(uart1, 'N');
-					led.set_rgb(255, 0, 0);
-			} else {
-				while (!gpio_get(command_line_pin))
-					tight_loop_contents();
-				sleep_us(100); //
-				uart_putc_raw(uart1, 'A');
-				led.set_rgb(0, 0, 255);
-				int drive_number = sio_command.device_id-0x30; // TODO any bits to clear, also above?
-				if(sio_command.command_id == 'S') {
+		if(try_get_sio_command()) {
+			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
+			int drive_number = sio_command.device_id-0x30; // TODO any bits to clear?
+			f_stat = FR_OK;
+			uint8_t r = 'A';
+			switch(sio_command.command_id) {
+				case 'S':
+					uart_putc_raw(uart1, r);
 					to_read = 4;
+					// check for mounted and read only flag, and ...?
 					sector_buffer[0] = 0x18; // motor on, read only
-					sector_buffer[1] = 0xFF;
+					sector_buffer[1] = (mounts[drive_number].status >> 24) & 0xFF;
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
-					f_stat = FR_OK;
-				} else {
-					to_read = disk_headers[drive_number-1].atr_header.sec_size;
+					break;
+				case 'R':
+					// TODO preverify sector number and ATR size?
+					uart_putc_raw(uart1, r);
 					do {
 						if((f_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 							break;
 						if((f_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
 							break;
 						// TODO the sector numbering logic is a bit more complex for sector sizes != 128
+						to_read = disk_headers[drive_number-1].atr_header.sec_size;
 						if((f_stat = f_lseek(&fil, sizeof(atr_header_type)+to_read*(sio_command.sector_number-1))) != FR_OK)
 							break;
 						if((f_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
@@ -807,21 +839,33 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					}while(false);
 					f_close(&fil);
 					f_mount(0, "", 1);
-				}
+					if(f_stat != FR_OK) {
+						// TODO set also status byte
+						// Alternatively, check the availability of data first,
+						// and send NACK if there is none.
+						to_read = 128;
+						memset(sector_buffer, 0, to_read);
+					}
+					break;
+				default:
+					r = 'N';
+					uart_putc_raw(uart1, r);
+					break;
+			}
+			if(r == 'A') {
 				uart_tx_wait_blocking(uart1);
-				sleep_us(300);
-				if(f_stat == FR_OK) {
+				sleep_us(300); // Again, timeout mentioned by atari_drive_emulator.c
+				if(f_stat == FR_OK)
 					uart_putc_raw(uart1, 'C');
+				else
+					uart_putc_raw(uart1, 'E');
+				if(to_read) {
 					uart_tx_wait_blocking(uart1);
-					sleep_us(150);
+					sleep_us(150); // Another one from atari_drive_emulator.c
 					uart_write_blocking(uart1, sector_buffer, to_read);
 					uart_putc_raw(uart1, sio_checksum(sector_buffer, to_read));
-				} else {
-					uart_putc_raw(uart1, 'E');
-					led.set_rgb(255,0,0);
 				}
-				uart_tx_wait_blocking(uart1);
-				// check sector out of range and file read status? TODO implicit in trying to read the file with lseek
+				// uart_tx_wait_blocking(uart1);
 			}
 		} else {
 			offset = mounts[0].status;
