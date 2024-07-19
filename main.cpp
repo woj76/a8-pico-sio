@@ -747,26 +747,24 @@ uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t
 	if(!mounts[drive_number].mounted) {
 		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 		return 'N';
-	} else {
-		uint8_t r = 'A';
-		*offset = sio_command.sector_number-1;
-		if(*offset < 3) {
-			*offset <<= 7;
-			*to_read = 128;
-		} else {
-			*to_read = disk_headers[drive_number-1].atr_header.sec_size;
-			*offset = 384+(*offset-3)*(*to_read);
-		}
-		if(sio_command.sector_number == 0 || *offset + *to_read > mounts[drive_number].status) {
-			disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
-			r = 'N';
-		}
-		if(write_op && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
-			disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
-			r = 'N';
-		}
-		return r;
 	}
+	if(write_op && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
+		disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
+		return 'N';
+	}
+	*offset = sio_command.sector_number-1;
+	if(*offset < 3) {
+		*offset <<= 7;
+		*to_read = 128;
+	} else {
+		*to_read = disk_headers[drive_number-1].atr_header.sec_size;
+		*offset = 384+(*offset-3)*(*to_read);
+	}
+	if(sio_command.sector_number == 0 || *offset + *to_read > mounts[drive_number].status) {
+		disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+		return 'N';
+	}
+	return 'A';
 }
 
 uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
