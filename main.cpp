@@ -711,6 +711,7 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 bool try_get_sio_command() {
 	if(gpio_get(command_line_pin) == 1)
 		return false;
+	uint8_t status_byte = 0;
 	bool r = true;
 	int i = 0;
 	memset(&sio_command, 0x00, 4);
@@ -720,23 +721,48 @@ bool try_get_sio_command() {
 		for(i=0; i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr; i++)
 			((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
 	}
-	if(uart_get_hw(uart1)->rsr || i != 5 || sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum) {
-		// TODO switch SIO speed
+	if(uart_get_hw(uart1)->rsr || i != 5) {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
-	} else if(sio_command.device_id < 0x31 || sio_command.device_id > 0x34) {
-		r = false;
+		status_byte |= 0x1; // Command frame error
 	}
-	// TODO Add timeout to this? To avoid (unlikely) infinite hang?
-	// Check Altirra HW manual for how long it should be.
-	while (!gpio_get(command_line_pin))
+	if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum) {
+		r = false;
+		status_byte |= 0x2; // Checksum error
+	}
+	if(sio_command.device_id >= 0x31 && sio_command.device_id <= 0x34)
+		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
+	else
+		r = false;
+
+	// TODO This can probably be skipped altogether?
+	absolute_time_t t = make_timeout_time_ms(1);
+	while (!gpio_get(command_line_pin) && to_ms_since_boot(get_absolute_time()) <= to_ms_since_boot(t))
 		tight_loop_contents();
-	return r;
+	return r && gpio_get(command_line_pin);
 }
 
-// for not mounted drives report motor on but no disk (drive always present,
-// not only when the disk is in, or???)
-// mounted == motor_on
+uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read) {
+	if(!mounts[drive_number].mounted) {
+		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
+		return 'N';
+	} else {
+		// TODO make this a function (write will use the same)
+		*offset = sio_command.sector_number-1;
+		if(*offset < 3) {
+			*offset *= 128;
+			*to_read = 128;
+		} else {
+			*to_read = disk_headers[drive_number-1].atr_header.sec_size;
+			*offset = 384+(*offset-3)*(*to_read);
+		}
+		if(sio_command.sector_number == 0 || *offset + *to_read > mounts[drive_number].status) {
+			disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+			return 'N';
+		}
+	}
+	return 'A';
+}
 
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
@@ -773,9 +799,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
 						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
-						disk_headers[i-1].atr_header.temp1 = 0xFF;
+						disk_headers[i-1].atr_header.temp2 = 0xFF;
 						// Whatever the ATR flag says, if the file itself is read-only,
 						// so is the ATR disk.
+						// TODO non-standard ATR sizes should also be write protected
 						if(fil_info.fattrib & AM_RDO)
 							disk_headers[i-1].atr_header.flags |= 0x1;
 						led.set_rgb(0,255,0);
@@ -803,49 +830,61 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			memset(sector_buffer, 0, 512);
 			int drive_number = sio_command.device_id-0x30;
 			f_op_stat = FR_OK;
+			to_read = 0;
 			uint8_t r = 'A';
 			switch(sio_command.command_id) {
 				case 'S':
 					uart_putc_raw(uart1, r);
 					to_read = 4;
-					// check for mounted and read only flag, and ...?
 					// TODO motor on only after first actual disk operation?
-					sector_buffer[0] = 0x18; // motor on, read only
-					sector_buffer[1] = disk_headers[drive_number-1].atr_header.temp1;
+					// for not mounted drives report motor on but no disk (drive always present,
+					// not only when the disk is in, or???)
+					// mounted == motor_on
+					sector_buffer[0] = disk_headers[drive_number-1].atr_header.temp1;
+					sector_buffer[1] = disk_headers[drive_number-1].atr_header.temp2;
+					if(mounts[drive_number].mounted) {
+						sector_buffer[0] |= 0x10; // motor on
+						if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+						sector_buffer[0] |= 0x08; // write protect
+						if(disk_headers[drive_number-1].atr_header.sec_size == 256)
+							sector_buffer[0] |= 0x20;
+						else if(mounts[drive_number].status == 0x20800) { // 1040*128
+							sector_buffer[0] |= 0x80; // medium density
+						}
+					} else {
+						sector_buffer[1] &= 0x7F; // disk removed
+					}
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
 					break;
 				case 'R':
-					// TODO preverify sector number and ATR size?
-					// set sector status byte?
-					// how does the SDrive do it?
-					// Check for sector size 0?
+					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 					uart_putc_raw(uart1, r);
-					do {
-						if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
-							break;
-						if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
-							break;
-						// TODO the sector numbering logic is a bit more complex for sector sizes != 128
-						to_read = disk_headers[drive_number-1].atr_header.sec_size;
-						if((f_op_stat = f_lseek(&fil, sizeof(atr_header_type)+to_read*(sio_command.sector_number-1))) != FR_OK)
-							break;
-						if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
-							break;
-						if(bytes_read != to_read) {
-							f_op_stat = FR_INT_ERR;
-							break;
-						}
-					}while(false);
-					f_close(&fil);
-					f_mount(0, "", 1);
-					if(f_op_stat != FR_OK) {
-						// TODO set also sector status byte -> no record found or what?
-						// Alternatively, check the availability of data first,
-						// and send NACK if there is none.
-						to_read = 128;
+					if(r == 'N') {
+						to_read = 0;
 					} else {
-						// TODO clear sector status byte
+						do {
+							if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+								break;
+							if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
+								break;
+							if((f_op_stat = f_lseek(&fil, sizeof(atr_header_type)+offset)) != FR_OK)
+								break;
+							if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
+								break;
+							if(bytes_read != to_read) {
+								f_op_stat = FR_INT_ERR;
+								break;
+							}
+						}while(false);
+						f_close(&fil);
+						f_mount(0, "", 1);
+					}
+					if(f_op_stat != FR_OK) {
+						to_read = 128;
+						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+					} else {
+						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 					}
 					break;
 				default:
