@@ -433,7 +433,8 @@ volatile mounts_type mounts[] = {
   // otherwise, check if command line low and serial read waiting, act accordingly
 */
 
-uint8_t sector_buffer[512];
+const size_t sector_buffer_size = 512;
+uint8_t sector_buffer[sector_buffer_size];
 
 const uint32_t cas_header_FUJI = 0x494A5546;
 const uint32_t cas_header_baud = 0x64756162;
@@ -742,15 +743,15 @@ bool try_get_sio_command() {
 	return r && gpio_get(command_line_pin);
 }
 
-uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read) {
+uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool write_op) {
 	if(!mounts[drive_number].mounted) {
 		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 		return 'N';
 	} else {
-		// TODO make this a function (write will use the same)
+		uint8_t r = 'A';
 		*offset = sio_command.sector_number-1;
 		if(*offset < 3) {
-			*offset *= 128;
+			*offset <<= 7;
 			*to_read = 128;
 		} else {
 			*to_read = disk_headers[drive_number-1].atr_header.sec_size;
@@ -758,10 +759,57 @@ uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t
 		}
 		if(sio_command.sector_number == 0 || *offset + *to_read > mounts[drive_number].status) {
 			disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
-			return 'N';
+			r = 'N';
 		}
+		if(write_op && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
+			disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
+			r = 'N';
+		}
+		return r;
 	}
-	return 'A';
+}
+
+uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
+	int i;
+	uint8_t r = 'A';
+	uint8_t status = 0;
+	for(i=0; i<to_read && uart_is_readable_within_us(uart1, 2500); i++)
+		sector_buffer[i] = (uint8_t)uart_get_hw(uart1)->dr;
+	if(i!=to_read || !uart_is_readable_within_us(uart1, 2500)) {
+		status |= 0x01;
+		r = 'N';
+	}else if(uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
+		status |= 0x02;
+		r = 'N';
+	}
+	disk_headers[drive_number-1].atr_header.temp1 = status;
+	return r;
+}
+
+FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset = 0) {
+	FATFS fatfs;
+	FIL fil;
+	FRESULT f_op_stat;
+	UINT bytes_transferred;
+	uint8_t *data = &sector_buffer[t_offset];
+	do {
+		if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+			break;
+		if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
+			break;
+		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
+			break;
+		f_op_stat = op_write ?
+			f_write(&fil, data, to_transfer, &bytes_transferred) :
+			f_read(&fil, data, to_transfer, &bytes_transferred);
+		if(f_op_stat != FR_OK)
+			break;
+		if(bytes_transferred != to_transfer)
+			f_op_stat = FR_INT_ERR;
+	}while(false);
+	f_close(&fil);
+	f_mount(0, "", 1);
+	return f_op_stat;
 }
 
 void main_sio_loop(uint sm, uint sm_turbo) {
@@ -772,9 +820,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 	FSIZE_t offset;
 	FSIZE_t to_read;
 	FRESULT f_op_stat;
+	int i;
 
 	while(true) {
-		for(int i=0; i<5; i++) {
+		for(i=0; i<5; i++) {
 			if(!mounts[i].mounted || mounts[i].status)
 				continue;
 			if(f_mount(&fatfs, "", 1) != FR_OK)
@@ -803,6 +852,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						// Whatever the ATR flag says, if the file itself is read-only,
 						// so is the ATR disk.
 						// TODO non-standard ATR sizes should also be write protected
+						// XEX-es too
 						if(fil_info.fattrib & AM_RDO)
 							disk_headers[i-1].atr_header.flags |= 0x1;
 						led.set_rgb(0,255,0);
@@ -827,19 +877,19 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 #ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 #endif
-			memset(sector_buffer, 0, 512);
+			// TODO does sector buffer need to be 512 bytes long?
+			memset(sector_buffer, 0, sector_buffer_size);
 			int drive_number = sio_command.device_id-0x30;
 			f_op_stat = FR_OK;
 			to_read = 0;
 			uint8_t r = 'A';
 			switch(sio_command.command_id) {
-				case 'S':
+				case 'S': // get status
 					uart_putc_raw(uart1, r);
 					to_read = 4;
 					// TODO motor on only after first actual disk operation?
 					// for not mounted drives report motor on but no disk (drive always present,
-					// not only when the disk is in, or???)
-					// mounted == motor_on
+					// not only when the disk is in), or???
 					sector_buffer[0] = disk_headers[drive_number-1].atr_header.temp1;
 					sector_buffer[1] = disk_headers[drive_number-1].atr_header.temp2;
 					if(mounts[drive_number].mounted) {
@@ -857,36 +907,46 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
 					break;
-				case 'R':
-					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
+				case 'R': // read sector
+					r = check_drive_and_sector_status(drive_number, &offset, &to_read, false);
 					uart_putc_raw(uart1, r);
-					if(r == 'N') {
-						to_read = 0;
-					} else {
-						do {
-							if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
-								break;
-							if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, FA_READ)) != FR_OK)
-								break;
-							if((f_op_stat = f_lseek(&fil, sizeof(atr_header_type)+offset)) != FR_OK)
-								break;
-							if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
-								break;
-							if(bytes_read != to_read) {
-								f_op_stat = FR_INT_ERR;
-								break;
-							}
-						}while(false);
-						f_close(&fil);
-						f_mount(0, "", 1);
-					}
-					if(f_op_stat != FR_OK) {
-						to_read = 128;
+					if(r == 'N')
+						break;
+					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false)) != FR_OK) {
+						// to_read = 128; // TODO ???
 						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 					} else {
 						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 					}
 					break;
+				case 'P': // put sector
+				case 'W': // write (+verify) sector
+					r = check_drive_and_sector_status(drive_number, &offset, &to_read, true);
+					uart_putc_raw(uart1, r);
+					if(r == 'N')
+						break;
+					if((r = try_receive_data(drive_number, to_read)) == 'N')
+						break;
+					sleep_us(850);
+					uart_putc_raw(uart1, r);
+					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
+						disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
+						break;
+					} else if (sio_command.command_id == 'W') {
+						if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false, to_read)) != FR_OK)
+							break;
+						if(memcmp(sector_buffer, &sector_buffer[to_read], to_read)) {
+							f_op_stat = FR_INT_ERR;
+							break;
+						}
+					}
+					to_read = 0;
+					break;
+				// '!' 21 format 1
+				// 'N' 4E read percom
+				// 'O' 4F write percom
+				// '"' 22 format 2
+				// '?' 3F get speed index
 				default:
 					r = 'N';
 					uart_putc_raw(uart1, r);
@@ -905,43 +965,25 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				uart_tx_wait_blocking(uart1);
 			}
 			if(sio_command.command_id == 0x3F) {
-				// TODO if the command was getspeed, change the baudrate now, drain queue first
+				// TODO if the command was getspeed, change the baudrate now
 			}
 		} else {
 			offset = mounts[0].status;
 			if(mounts[0].mounted && offset && offset < cas_size &&
 				(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
 					(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
-				to_read = 0;
-				do {
-					if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
-						break;
-					if((f_op_stat = f_open(&fil, (const char *)mounts[0].mount_path, FA_READ)) != FR_OK)
-						break;
-					if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
-						break;
-					to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
-					if((f_op_stat = f_read(&fil, sector_buffer, to_read, &bytes_read)) != FR_OK)
-						break;
-					if(bytes_read != to_read) {
-						f_op_stat = FR_INT_ERR;
-						break;
-					}
-					offset += to_read;
-					cas_block_index += to_read;
-				}while(false);
-				f_close(&fil);
-				f_mount(0, "", 1);
-				if(f_op_stat == FR_OK) {
-					mounts[0].status = offset;
-#ifdef PICO_UART
-					gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
-#endif
-				} else {
+				to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
+				if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
 					mounts[0].mounted = false;
 					mounts[0].status = 0;
 					continue;
 				}
+				offset += to_read;
+				cas_block_index += to_read;
+				mounts[0].status = offset;
+#ifdef PICO_UART
+				gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
+#endif
 				uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
 				while(silence_duration > 0) {
 					uint16_t silence_block_len = silence_duration;
@@ -953,7 +995,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				int bs, be, bd;
 				uint8_t b;
 				uint16_t ld;
-				for(int i=0; i < to_read; i += cas_block_multiple) {
+				for(i=0; i < to_read; i += cas_block_multiple) {
 					switch(cas_header.signature) {
 						case cas_header_data:
 							pio_enqueue(0, cas_sample_duration);
