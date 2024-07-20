@@ -481,6 +481,10 @@ typedef union {
 
 disk_header_type disk_headers[4];
 
+const uint8_t disk_type_atr = 0;
+const uint8_t disk_type_xex = 1;
+const uint8_t disk_type_atx = 2;
+
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	uint bytes_read;
 	if(f_lseek(fil, offset) != FR_OK) {
@@ -838,7 +842,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// how to hold the file type information efficiently
 					// read two bytes first?
 					// ATX starts with AT8X
-					// XEX starts with 0xFF 0xFF  
+					// XEX starts with 0xFF 0xFF
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
 						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 						disk_headers[i-1].atr_header.temp2 = 0xFF;
@@ -848,6 +852,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						// XEX-es too
 						if(fil_info.fattrib & AM_RDO)
 							disk_headers[i-1].atr_header.flags |= 0x1;
+						disk_headers[i-1].atr_header.temp3 = 0xFF; // TODO PERCOM entry index
+						// TODO if non-standard disk size set read-only on
+						// TODO percom will have 4 entries (SSSD,SSED,SSDD,DSDD)
+						// use other bits to mark if the percom was sent and correct
+						disk_headers[i-1].atr_header.temp4 = disk_type_atr; // disk image ATR
 						led.set_rgb(0,255,0);
 					} else {
 						led.set_rgb(255,0,0);
@@ -904,7 +913,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					if(r == 'N')
 						break;
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false)) != FR_OK) {
-						// to_read = 128; // TODO ???
 						// ~0x10 record not found? Should this even be reported?
 						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 					} else {
@@ -917,11 +925,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_putc_raw(uart1, r);
 					if(r == 'N')
 						break;
-					if((r = try_receive_data(drive_number, to_read)) == 'N')
-						// TODO or should we actually return 'N'?
-						break;
+					r = try_receive_data(drive_number, to_read);
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
+					if(r == 'N')
+						break;
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
 						disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 						break;
