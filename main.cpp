@@ -9,13 +9,7 @@
 // https://allpinouts.org/pinouts/connectors/serial/atari-8-bit-serial-input-output-sio/
 
 // https://forums.atariage.com/topic/271215-why-the-k-on-boot/?do=findComment&comment=4209492
-
-// Config:
-// Turbo system:
-//   KSO 2000 J2
-//   KSO 2000 SIO
-//   ???
-// HSIO divisor: 0-9
+// http://www.whizzosoftware.com/sio2arduino/vapi.html
 
 #include <string.h>
 #include <cstdlib>
@@ -843,6 +837,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// TODO split this into ATR, ATX, and XEX
 					// how to hold the file type information efficiently
 					// read two bytes first?
+					// ATX starts with AT8X
+					// XEX starts with 0xFF 0xFF  
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
 						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 						disk_headers[i-1].atr_header.temp2 = 0xFF;
