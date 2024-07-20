@@ -488,7 +488,7 @@ typedef union {
 disk_header_type disk_headers[4];
 
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
-	UINT bytes_read;
+	uint bytes_read;
 	if(f_lseek(fil, offset) != FR_OK) {
 		offset = 0;
 		goto cas_read_forward_exit;
@@ -701,7 +701,7 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 	uint8_t cksum = 0;
 	uint16_t nck;
 
-	for (int i = 0; i < len; i++) {
+	for(int i=0; i<len; i++) {
 		nck = cksum + data[i];
 		cksum = (nck > 0x00ff) ? 1 : 0;
 		cksum += (nck & 0x00ff);
@@ -714,14 +714,13 @@ bool try_get_sio_command() {
 		return false;
 	uint8_t status_byte = 0;
 	bool r = true;
-	int i = 0;
+	int i=0;
 	memset(&sio_command, 0x00, 4);
 	sio_command.checksum = 0xFF;
-	if(uart_is_readable(uart1)) {
-		// TODO the 2.5 ms timeout dep current SIO speed?
-		for(i=0; i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr; i++)
-			((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
-	}
+	//if(uart_is_readable(uart1))
+	// TODO the 2.5 ms timeout dep current SIO speed?
+	while(i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr)
+		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
 	if(uart_get_hw(uart1)->rsr || i != 5) {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
@@ -735,20 +734,18 @@ bool try_get_sio_command() {
 		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
 	else
 		r = false;
-
-	// TODO This can probably be skipped altogether?
-	absolute_time_t t = make_timeout_time_ms(1);
-	while (!gpio_get(command_line_pin) && to_ms_since_boot(get_absolute_time()) <= to_ms_since_boot(t))
+	absolute_time_t t = make_timeout_time_ms(1); // According to Avery 950us
+	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) < 0)
 		tight_loop_contents();
 	return r && gpio_get(command_line_pin);
 }
 
-uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool write_op) {
+uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool op_write=false) {
 	if(!mounts[drive_number].mounted) {
 		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 		return 'N';
 	}
-	if(write_op && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
+	if(op_write && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
 		disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
 		return 'N';
 	}
@@ -768,11 +765,11 @@ uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t
 }
 
 uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
-	int i;
+	int i=0;
 	uint8_t r = 'A';
 	uint8_t status = 0;
-	for(i=0; i<to_read && uart_is_readable_within_us(uart1, 2500); i++)
-		sector_buffer[i] = (uint8_t)uart_get_hw(uart1)->dr;
+	while(i<to_read && uart_is_readable_within_us(uart1, 2500))
+		sector_buffer[i++] = (uint8_t)uart_get_hw(uart1)->dr;
 	if(i!=to_read || !uart_is_readable_within_us(uart1, 2500)) {
 		status |= 0x01;
 		r = 'N';
@@ -788,7 +785,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	FATFS fatfs;
 	FIL fil;
 	FRESULT f_op_stat;
-	UINT bytes_transferred;
+	uint bytes_transferred;
 	uint8_t *data = &sector_buffer[t_offset];
 	do {
 		if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
@@ -814,11 +811,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
 	FILINFO fil_info;
-	UINT bytes_read;
 	FSIZE_t offset;
 	FSIZE_t to_read;
 	FRESULT f_op_stat;
 	int i;
+	uint bytes_read;
 
 	while(true) {
 		for(i=0; i<5; i++) {
@@ -833,9 +830,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					check_turbo_conf();
 					cas_sample_duration = timing_base_clock/600;
 					cas_size = f_size(&fil);
-					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI) {
+					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
-					}
 					if(!mounts[i].status) {
 						mounts[i].mounted = false;
 						led.set_rgb(255,0,0);
@@ -844,6 +840,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					}
 				} else {
 					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
+					// TODO split this into ATR, ATX, and XEX
+					// how to hold the file type information efficiently
+					// read two bytes first?
 					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
 						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 						disk_headers[i-1].atr_header.temp2 = 0xFF;
@@ -875,7 +874,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 #ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 #endif
-			// TODO does sector buffer need to be 512 bytes long?
 			memset(sector_buffer, 0, sector_buffer_size);
 			int drive_number = sio_command.device_id-0x30;
 			f_op_stat = FR_OK;
@@ -893,12 +891,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					if(mounts[drive_number].mounted) {
 						sector_buffer[0] |= 0x10; // motor on
 						if(disk_headers[drive_number-1].atr_header.flags & 0x1)
-						sector_buffer[0] |= 0x08; // write protect
+							sector_buffer[0] |= 0x08; // write protect
 						if(disk_headers[drive_number-1].atr_header.sec_size == 256)
 							sector_buffer[0] |= 0x20;
-						else if(mounts[drive_number].status == 0x20800) { // 1040*128
+						else if(mounts[drive_number].status == 0x20800) // 1040*128
 							sector_buffer[0] |= 0x80; // medium density
-						}
 					} else {
 						sector_buffer[1] &= 0x7F; // disk removed
 					}
@@ -906,12 +903,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[3] = 0x0;
 					break;
 				case 'R': // read sector
-					r = check_drive_and_sector_status(drive_number, &offset, &to_read, false);
+					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 					uart_putc_raw(uart1, r);
 					if(r == 'N')
 						break;
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false)) != FR_OK) {
 						// to_read = 128; // TODO ???
+						// ~0x10 record not found? Should this even be reported?
 						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 					} else {
 						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
@@ -924,6 +922,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					if(r == 'N')
 						break;
 					if((r = try_receive_data(drive_number, to_read)) == 'N')
+						// TODO or should we actually return 'N'?
 						break;
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
