@@ -464,6 +464,16 @@ uint8_t cas_fsk_bit;
 
 volatile bool cas_block_turbo;
 
+const uint8_t percom_table[] = {
+	0x28,0x03,0x00,0x12,0x00,0x00,0x00,0x80, 0x80,0x16,0x80,0x00, 0,
+	0x28,0x03,0x00,0x1A,0x00,0x04,0x00,0x80, 0x80,0x20,0x80,0x00, 0,
+	0x28,0x03,0x00,0x12,0x00,0x04,0x01,0x00, 0xE8,0x2C,0x00,0x01, 0,
+	0x28,0x03,0x00,0x12,0x01,0x04,0x01,0x00, 0xE8,0x59,0x00,0x01, 0
+};
+
+const int percom_table_size = 4;
+
+
 typedef struct __attribute__((__packed__)) {
 	uint16_t magic;
 	uint16_t pars;
@@ -476,6 +486,7 @@ typedef struct __attribute__((__packed__)) {
 
 typedef union {
 	atr_header_type atr_header;
+	uint8_t data[sizeof(atr_header_type)];
 	// atx_header_type atx_header;
 } disk_header_type;
 
@@ -484,6 +495,27 @@ disk_header_type disk_headers[4];
 const uint8_t disk_type_atr = 0;
 const uint8_t disk_type_xex = 1;
 const uint8_t disk_type_atx = 2;
+
+
+uint8_t inline locate_percom(int drive_number) {
+	int i=0;
+	uint8_t r=0x80;
+	while(i<percom_table_size) {
+		if(!memcmp(&disk_headers[drive_number-1].data[2], &percom_table[i*13+8], 5)) {
+			r = i;
+			break;
+		}
+		i++;
+	}
+	return r;
+}
+
+bool inline compare_percom(int drive_number) {
+	int i = disk_headers[drive_number-1].atr_header.temp3 & 0x3;
+	if(percom_table[i*13] != sector_buffer[0] || !memcmp(&percom_table[i*13+2], &sector_buffer[2], 6))
+		return false;
+	return true;
+}
 
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	uint bytes_read;
@@ -850,11 +882,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						// so is the ATR disk.
 						// TODO non-standard ATR sizes should also be write protected
 						// XEX-es too
-						if(fil_info.fattrib & AM_RDO)
+						disk_headers[i-1].atr_header.temp3 = locate_percom(i);
+						if((fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 							disk_headers[i-1].atr_header.flags |= 0x1;
-						disk_headers[i-1].atr_header.temp3 = 0xFF; // TODO PERCOM entry index
-						// TODO if non-standard disk size set read-only on
-						// TODO percom will have 4 entries (SSSD,SSED,SSDD,DSDD)
 						// use other bits to mark if the percom was sent and correct
 						disk_headers[i-1].atr_header.temp4 = disk_type_atr; // disk image ATR
 						led.set_rgb(0,255,0);
@@ -907,6 +937,18 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
 					break;
+				case 'N': // read percom
+					// Only writable (according to our rules) disks react to PERCOM command frames
+					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+						r = 'N';
+					uart_putc_raw(uart1, r);
+					if(r == 'N')
+						break;
+					memcpy(sector_buffer, &percom_table[(disk_headers[drive_number-1].atr_header.temp3 & 0x3)*13], 8);
+					memset(&sector_buffer[8], 0x00, 4);
+					disk_headers[drive_number-1].atr_header.temp3 |= 0x04;
+					to_read = 12;
+					break;
 				case 'R': // read sector
 					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 					uart_putc_raw(uart1, r);
@@ -918,6 +960,24 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					} else {
 						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 					}
+					break;
+				case 'O': // read percom
+					// Only writable (according to our rules) disks react to PERCOM command frames
+					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+						r = 'N';
+					uart_putc_raw(uart1, r);
+					if(r == 'N')
+						break;
+					to_read = 12;
+					r = try_receive_data(drive_number, to_read);
+					if(r == 'A' && !compare_percom(drive_number)) {
+						r = 'N';
+					}
+					sleep_us(850);
+					uart_putc_raw(uart1, r);
+					if(r == 'N')
+						break;
+					to_read = 0;
 					break;
 				case 'P': // put sector
 				case 'W': // write (+verify) sector
@@ -944,9 +1004,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					to_read = 0;
 					break;
 				// '!' 21 format 1
-				// 'N' 4E read percom
-				// 'O' 4F write percom
+				// a writable, b &0x4 on temp3 set, or temp3 & 0x03 == 0
 				// '"' 22 format 2
+				// temp3 & 0x3 == 1 and writable
 				// '?' 3F get speed index
 				default:
 					r = 'N';
