@@ -718,6 +718,11 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 // byte1 = read sector 'R'
 // byte2+3 = sector number
 
+const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
+const uint hsio_opt_to_baud[] = {19200, 19200, 19200, 19200, 19200, 19200, 19200, 19200};
+uint8_t high_speed = 0;
+uint8_t current_high_speed_index = 0;
+
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
 	uint8_t command_id;
@@ -764,6 +769,10 @@ bool try_get_sio_command() {
 		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
 	else
 		r = false;
+	if(status_byte && current_options[1] && high_speed) {
+		current_high_speed_index ^= current_options[1];
+		uart_set_baudrate(uart1, hsio_opt_to_baud[current_high_speed_index]);
+	}
 	absolute_time_t t = make_timeout_time_ms(1); // According to Avery 950us
 	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) < 0)
 		tight_loop_contents();
@@ -829,7 +838,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 			f_read(&fil, data, to_transfer, &bytes_transferred);
 		if(f_op_stat != FR_OK)
 			break;
-		if(bytes_transferred != to_transfer)
+		if(bytes_transferred != to_transfer || !mounts[drive_number].mounted)
 			f_op_stat = FR_INT_ERR;
 	}while(false);
 	f_close(&fil);
@@ -880,12 +889,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						disk_headers[i-1].atr_header.temp2 = 0xFF;
 						// Whatever the ATR flag says, if the file itself is read-only,
 						// so is the ATR disk.
-						// TODO non-standard ATR sizes should also be write protected
 						// XEX-es too
 						disk_headers[i-1].atr_header.temp3 = locate_percom(i);
-						if((fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
+						if(!current_options[0] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 							disk_headers[i-1].atr_header.flags |= 0x1;
-						// use other bits to mark if the percom was sent and correct
 						disk_headers[i-1].atr_header.temp4 = disk_type_atr; // disk image ATR
 						led.set_rgb(0,255,0);
 					} else {
@@ -939,21 +946,19 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'N': // read percom
 					// Only writable (according to our rules) disks react to PERCOM command frames
-					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+					if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
 						r = 'N';
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
 					memcpy(sector_buffer, &percom_table[(disk_headers[drive_number-1].atr_header.temp3 & 0x3)*13], 8);
-					memset(&sector_buffer[8], 0x00, 4);
-					disk_headers[drive_number-1].atr_header.temp3 |= 0x04;
+					sector_buffer[8] = 0xFF;
+					memset(&sector_buffer[9], 0x00, 3);
 					to_read = 12;
 					break;
 				case 'R': // read sector
 					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false)) != FR_OK) {
 						// ~0x10 record not found? Should this even be reported?
 						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
@@ -961,35 +966,32 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 					}
 					break;
-				case 'O': // read percom
+				case 'O': // write percom
 					// Only writable (according to our rules) disks react to PERCOM command frames
-					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+					if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
 						r = 'N';
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
 					to_read = 12;
 					r = try_receive_data(drive_number, to_read);
-					if(r == 'A' && !compare_percom(drive_number)) {
+					if(r == 'A' && !compare_percom(drive_number))
 						r = 'N';
-					}
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
+					 // Mark that PERCOM has been written successfully
+					disk_headers[drive_number-1].atr_header.temp3 |= 0x04;
 					to_read = 0;
 					break;
 				case 'P': // put sector
 				case 'W': // write (+verify) sector
 					r = check_drive_and_sector_status(drive_number, &offset, &to_read, true);
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
 					r = try_receive_data(drive_number, to_read);
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
-					if(r == 'N')
-						break;
+					if(r == 'N') break;
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
 						disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 						break;
@@ -1003,11 +1005,29 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					}
 					to_read = 0;
 					break;
-				// '!' 21 format 1
-				// a writable, b &0x4 on temp3 set, or temp3 & 0x03 == 0
-				// '"' 22 format 2
-				// temp3 & 0x3 == 1 and writable
-				// '?' 3F get speed index
+				case '!':
+				case '"':
+					i = sio_command.command_id - 0x21;
+					if(!mounts[drive_number].mounted ||
+						(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
+						(i != (disk_headers[drive_number-1].atr_header.temp3 & 0x3)
+							&& !(disk_headers[drive_number-1].atr_header.temp3 & 0x4)))
+						r = 'N';
+					uart_putc_raw(uart1, r);
+					if(r == 'N') break;
+					to_read = disk_headers[drive_number-1].atr_header.sec_size;
+					memset(sector_buffer, 0, to_read);
+					offset = mounts[drive_number].status >> 7;
+					for(i=0; i<offset; i++)
+						if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true)) != FR_OK)
+							break;
+					sector_buffer[0] = sector_buffer[1] = 0xFF;
+					break;
+				case '?': // get speed index
+					uart_putc_raw(uart1, r);
+					sector_buffer[0] = hsio_opt_to_index[current_options[1]];
+					to_read = 1;
+					break;
 				default:
 					r = 'N';
 					uart_putc_raw(uart1, r);
@@ -1025,8 +1045,14 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				uart_tx_wait_blocking(uart1);
 			}
-			if(sio_command.command_id == 0x3F) {
-				// TODO if the command was getspeed, change the baudrate now
+			if(sio_command.command_id == '?') {
+				uart_set_baudrate(uart1, hsio_opt_to_baud[current_options[1]]);
+				if(current_options[1]) {
+					high_speed = 1;
+					current_high_speed_index = current_options[1];
+				}else{
+					high_speed = 0;
+				}
 			}
 		} else {
 			offset = mounts[0].status;
@@ -1715,8 +1741,9 @@ restart_options:
 				break;
 			} else {
 				select_option(cursor_position);
-				// TODO process the new option set
+				// TODO process the new option set?
 				// For turbo this is done elsewhere
+				// HSIO is done
 				goto restart_options;
 			}
 		}
