@@ -459,7 +459,7 @@ uint32_t cas_sample_duration; // in cycles dep the base timing value
 uint16_t silence_duration; // in ms
 uint16_t cas_block_index;
 uint16_t cas_block_multiple;
-uint16_t dsk_baudrate = 19200;
+// uint16_t dsk_baudrate = 19200;
 uint8_t cas_fsk_bit;
 
 volatile bool cas_block_turbo;
@@ -719,7 +719,12 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 // byte2+3 = sector number
 
 const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
-const uint hsio_opt_to_baud[] = {19200, 19200, 19200, 19200, 19200, 19200, 19200, 19200};
+// NTSC
+// const uint hsio_opt_to_baud[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
+// PAL
+// const uint hsio_opt_to_baud[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
+// PAL/NTSC average
+const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
 uint8_t high_speed = 0;
 uint8_t current_high_speed_index = 0;
 
@@ -1207,7 +1212,7 @@ void core1_entry() {
 	//gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
 	//gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
 #ifdef PICO_UART
-	uart_init(uart1, dsk_baudrate);
+	uart_init(uart1, hsio_opt_to_baud[0]);
 	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 	gpio_set_function(sio_rx_pin, GPIO_FUNC_UART);
 	uart_set_hw_flow(uart1, false, false);
