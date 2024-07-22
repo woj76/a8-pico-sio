@@ -241,16 +241,83 @@ bool repeating_timer_directory(struct repeating_timer *t) {
 
 const std::string option_names[] = {
 	"Mount RdWr:",
+	"Host Clock:",
 	"HSIO Speed:",
 	"XEX Loader:",
 	"Turbo Data:",
 	"Turbo When:",
 	"PWM Invert:",
-	"      Save      "
+	"   >> Save <<   "
 };
-const int option_count = 7;
+const int option_count = 8;
 
-uint8_t current_options[option_count] = {0};
+typedef struct {
+	const int count;
+	const char **short_names;
+	const char **long_names;
+} option_list;
+
+const char *mount_option_names_short[] = {"  OFF", "   ON"};
+const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
+const char *clock_option_names_short[] = {"  PAL", " NTSC"};
+const char *clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
+const char *hsio_option_names_short[] = {"  $28", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
+const char *hsio_option_names_long[] = {"$28 ~19 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
+const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800"};
+const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800"};
+const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
+const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
+const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
+const char *turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
+const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
+
+const int mount_option_index = 0;
+const int clock_option_index = 1;
+const int hsio_option_index = 2;
+const int xex_option_index = 3;
+const int turbo1_option_index = 4;
+const int turbo2_option_index = 5;
+const int turbo3_option_index = 6;
+
+const option_list option_lists[] = {
+	{
+		.count = 2,
+		.short_names = mount_option_names_short,
+		.long_names = mount_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = clock_option_names_short,
+		.long_names = clock_option_names_long
+	},
+	{
+		.count = 8,
+		.short_names = hsio_option_names_short,
+		.long_names = hsio_option_names_long
+	},
+	{
+		.count = 4,
+		.short_names = xex_option_names_short,
+		.long_names = xex_option_names_long
+	},
+	{
+		.count = 5,
+		.short_names = turbo1_option_names_short,
+		.long_names = turbo1_option_names_long
+	},
+	{
+		.count = 4,
+		.short_names = turbo2_option_names_short,
+		.long_names = turbo2_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = mount_option_names_short,
+		.long_names = turbo3_option_names_long
+	}
+};
+
+uint8_t current_options[option_count-1] = {0};
 char curr_path[256] = {0};
 size_t num_files;
 
@@ -654,11 +721,11 @@ const uint32_t opt_to_turbo_motor_pin_mask[] = {comm_motor_pin_mask, kso_motor_p
 const uint32_t opt_to_turbo_motor_pin_val[] = {comm_motor_value_on, kso_motor_value_on, sio_motor_value_on, normal_motor_value_on};
 
 void check_turbo_conf() {
-	if(turbo_conf[0] != current_options[3]) {
+	if(turbo_conf[0] != current_options[turbo1_option_index]) {
 		if(turbo_conf[0] >= 0) {
 			pio_sm_set_enabled(cas_pio, sm_turbo, false);
 		}
-		turbo_conf[0] = current_options[3];
+		turbo_conf[0] = current_options[turbo1_option_index];
 		turbo_data_pin = opt_to_turbo_data_pin[turbo_conf[0]];
 		pio_gpio_init(cas_pio, turbo_data_pin);
 		sm_config_set_out_pins(&sm_config_turbo, turbo_data_pin, 1);
@@ -666,10 +733,10 @@ void check_turbo_conf() {
 		pio_sm_init(cas_pio, sm_turbo, pio_offset, &sm_config_turbo);
 		pio_sm_set_enabled(cas_pio, sm_turbo, true);
 	}
-	turbo_conf[1] = current_options[4];
+	turbo_conf[1] = current_options[turbo2_option_index];
 	turbo_motor_pin_mask = opt_to_turbo_motor_pin_mask[turbo_conf[1]];
 	turbo_motor_value_on = opt_to_turbo_motor_pin_val[turbo_conf[1]];
-	turbo_conf[2] = current_options[5];
+	turbo_conf[2] = current_options[turbo3_option_index];
 }
 
 volatile bool dma_block_turbo;
@@ -719,14 +786,12 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 // byte2+3 = sector number
 
 const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
-// NTSC
-// const uint hsio_opt_to_baud[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
-// PAL
-// const uint hsio_opt_to_baud[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
+const uint hsio_opt_to_baud_ntsc[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
+const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
-const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
+// const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
 uint8_t high_speed = 0;
-uint8_t current_high_speed_index = 0;
+uint8_t current_speed_index = 0;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
@@ -774,9 +839,9 @@ bool try_get_sio_command() {
 		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
 	else
 		r = false;
-	if(status_byte && current_options[1] && high_speed) {
-		current_high_speed_index ^= current_options[1];
-		uart_set_baudrate(uart1, hsio_opt_to_baud[current_high_speed_index]);
+	if(status_byte && current_options[hsio_option_index] && high_speed) {
+		current_speed_index ^= current_options[hsio_option_index];
+		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 	}
 	absolute_time_t t = make_timeout_time_ms(1); // According to Avery 950us
 	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) < 0)
@@ -896,7 +961,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						// so is the ATR disk.
 						// XEX-es too
 						disk_headers[i-1].atr_header.temp3 = locate_percom(i);
-						if(!current_options[0] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
+						if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 							disk_headers[i-1].atr_header.flags |= 0x1;
 						disk_headers[i-1].atr_header.temp4 = disk_type_atr; // disk image ATR
 						led.set_rgb(0,255,0);
@@ -1030,7 +1095,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case '?': // get speed index
 					uart_putc_raw(uart1, r);
-					sector_buffer[0] = hsio_opt_to_index[current_options[1]];
+					sector_buffer[0] = hsio_opt_to_index[current_options[hsio_option_index]];
 					to_read = 1;
 					break;
 				default:
@@ -1051,13 +1116,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				uart_tx_wait_blocking(uart1);
 			}
 			if(sio_command.command_id == '?') {
-				uart_set_baudrate(uart1, hsio_opt_to_baud[current_options[1]]);
-				if(current_options[1]) {
+				if(current_options[hsio_option_index]) {
 					high_speed = 1;
-					current_high_speed_index = current_options[1];
+					current_speed_index = current_options[hsio_option_index];
 				}else{
 					high_speed = 0;
 				}
+				uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 			}
 		} else {
 			offset = mounts[0].status;
@@ -1212,7 +1277,7 @@ void core1_entry() {
 	//gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
 	//gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
 #ifdef PICO_UART
-	uart_init(uart1, hsio_opt_to_baud[0]);
+	uart_init(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 	gpio_set_function(sio_rx_pin, GPIO_FUNC_UART);
 	uart_set_hw_flow(uart1, false, false);
@@ -1559,58 +1624,6 @@ get_file_exit:
 	main_buttons[0].str = &char_eject;
 }
 
-typedef struct {
-	const int count;
-	const char **short_names;
-	const char **long_names;
-} option_list;
-
-const char *mount_option_names_short[] = {"  OFF", "   ON"};
-const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
-const char *hsio_option_names_short[] = {"  $28", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
-const char *hsio_option_names_long[] = {"$28 ~19 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~80 kbit/s", " $3 ~90 kbit/s", " $2 ~100 kbit/s", " $1 ~110 kbit/s", " $0 ~128 kbit/s"};
-const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800"};
-const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800"};
-const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
-const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
-const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
-const char *turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
-const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
-
-const option_list option_lists[] = {
-	{
-		.count = 2,
-		.short_names = mount_option_names_short,
-		.long_names = mount_option_names_long
-	},
-	{
-		.count = 8,
-		.short_names = hsio_option_names_short,
-		.long_names = hsio_option_names_long
-	},
-	{
-		.count = 4,
-		.short_names = xex_option_names_short,
-		.long_names = xex_option_names_long
-	},
-	{
-		.count = 5,
-		.short_names = turbo1_option_names_short,
-		.long_names = turbo1_option_names_long
-	},
-	{
-		.count = 4,
-		.short_names = turbo2_option_names_short,
-		.long_names = turbo2_option_names_long
-	},
-	{
-		.count = 2,
-		.short_names = mount_option_names_short,
-		.long_names = turbo3_option_names_long
-	}
-};
-
-
 void update_selection_entry(const char **opt_names, int i, bool erase) {
 	text_location.x = 2*8*font_scale;
 	text_location.y = (2+i)*12*font_scale;
@@ -1682,8 +1695,8 @@ void select_option(int opt_num) {
 void update_options_entry(int i, bool erase) {
 	text_location.x = 2*8*font_scale;
 	text_location.y = (2+i)*12*font_scale;
-	if(i == option_count-1)
-		text_location.y += 4*font_scale;
+	//if(i == option_count-1)
+	//	text_location.y += 4*font_scale;
 	if(erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
