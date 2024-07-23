@@ -985,7 +985,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							break;
 						case disk_type_xex:
 							// Sectors occupied by the file itself
-							disk_headers[i-1].atr_header.pars = (f_size(&fil)+124)/125;
+							offset = f_size(&fil);
+							disk_headers[i-1].atr_header.pars = (offset+124)/125;
+							disk_headers[i-1].atr_header.pars_high = offset % 125;
+							if(!disk_headers[i-1].atr_header.pars_high)
+								disk_headers[i-1].atr_header.pars_high = 125;
 							// This incidentally can be a proper SD or ED disk
 							mounts[i].status = (disk_headers[i-1].atr_header.pars+3+0x170)*128;
 							disk_headers[i-1].atr_header.sec_size = 128;
@@ -1074,13 +1078,27 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 							break;
 						case disk_type_xex:
+							r = check_drive_and_sector_status(drive_number, &offset, &to_read);
+							uart_putc_raw(uart1, r);
+							if(r == 'N') break;
 							memset(sector_buffer, 0, 128);
-							// TODO
 							if(sio_command.sector_number >= 0x171) {
 									bytes_read = to_read;
 									offset = (sio_command.sector_number-0x171);
-									to_read = 125; // TODO
-									offset = sio_command.sector_number;
+									if(offset == disk_headers[drive_number-1].atr_header.pars-1) {
+										to_read = disk_headers[drive_number-1].atr_header.pars_high;
+									} else {
+										sector_buffer[125]=((sio_command.sector_number+1)>>8) & 0xFF;
+										sector_buffer[126]=((sio_command.sector_number+1) & 0xFF);
+										to_read = 125;
+									}
+									sector_buffer[127] = to_read;
+									offset *= 125;
+									if((f_op_stat = mounted_file_transfer(drive_number, offset, to_read , false)) != FR_OK)
+										disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+									else
+										disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
+									to_read = bytes_read;
 							} else {
 								// TODO
 								// XEX and sector <= 0x170
