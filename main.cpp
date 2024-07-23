@@ -559,9 +559,9 @@ typedef union {
 
 disk_header_type disk_headers[4];
 
-const uint8_t disk_type_atr = 0;
-const uint8_t disk_type_xex = 1;
-const uint8_t disk_type_atx = 2;
+const uint8_t disk_type_atr = 1;
+const uint8_t disk_type_xex = 2;
+const uint8_t disk_type_atx = 3;
 
 
 uint8_t inline locate_percom(int drive_number) {
@@ -815,7 +815,10 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 }
 
 bool try_get_sio_command() {
-	if(gpio_get(command_line_pin) == 1)
+	// Assumption - casette motor is on the active command line
+	// is much more likely due to turbo activation and casette transfer
+	// should not be interrupted
+	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
 		return false;
 	uint8_t status_byte = 0;
 	bool r = true;
@@ -843,7 +846,7 @@ bool try_get_sio_command() {
 		current_speed_index ^= current_options[hsio_option_index];
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 	}
-	absolute_time_t t = make_timeout_time_ms(1); // According to Avery 950us
+	absolute_time_t t = make_timeout_time_ms(1); // According to Avery's manual 950us
 	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) < 0)
 		tight_loop_contents();
 	return r && gpio_get(command_line_pin);
@@ -939,7 +942,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					check_turbo_conf();
 					cas_sample_duration = timing_base_clock/600;
 					cas_size = f_size(&fil);
-					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(cas_header_type) && cas_header.signature == cas_header_FUJI)
+					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
+							bytes_read == sizeof(cas_header_type) &&
+							cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
 					if(!mounts[i].status) {
 						mounts[i].mounted = false;
@@ -954,18 +959,49 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// read two bytes first?
 					// ATX starts with AT8X
 					// XEX starts with 0xFF 0xFF
-					if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type) && disk_headers[i-1].atr_header.magic == 0x0296) {
-						mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
-						disk_headers[i-1].atr_header.temp2 = 0xFF;
-						// Whatever the ATR flag says, if the file itself is read-only,
-						// so is the ATR disk.
-						// XEX-es too
-						disk_headers[i-1].atr_header.temp3 = locate_percom(i);
-						if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
-							disk_headers[i-1].atr_header.flags |= 0x1;
-						disk_headers[i-1].atr_header.temp4 = disk_type_atr; // disk image ATR
-						led.set_rgb(0,255,0);
-					} else {
+					disk_headers[i-1].atr_header.temp4 = 0;
+					if(f_read(&fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
+						if(*(uint16_t *)sector_buffer == 0x0296) // ATR magic
+							disk_headers[i-1].atr_header.temp4 = disk_type_atr;
+						else if(*(uint16_t *)sector_buffer == 0xFFFF)
+							disk_headers[i-1].atr_header.temp4 = disk_type_xex;
+						else if(*(uint32_t *)sector_buffer == 0x58385441) // AT8X
+							disk_headers[i-1].atr_header.temp4 = disk_type_atx;
+						f_lseek(&fil, 0);
+					}
+					switch(disk_headers[i-1].atr_header.temp4) {
+						case disk_type_atr:
+							if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
+								mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
+								disk_headers[i-1].atr_header.temp2 = 0xFF;
+								// Whatever the ATR flag says, if the file itself is read-only,
+								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
+								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
+									disk_headers[i-1].atr_header.flags |= 0x1;
+								led.set_rgb(0,255,0);
+							} else {
+								disk_headers[i-1].atr_header.temp4 = 0;
+							}
+							break;
+						case disk_type_xex:
+							// Sectors occupied by the file itself
+							disk_headers[i-1].atr_header.pars = (f_size(&fil)+124)/125;
+							// This incidentally can be a proper SD or ED disk
+							mounts[i].status = (disk_headers[i-1].atr_header.pars+3+0x170)*128;
+							disk_headers[i-1].atr_header.sec_size = 128;
+							disk_headers[i-1].atr_header.flags = 0x1;
+							disk_headers[i-1].atr_header.temp2 = 0xFF;
+							break;
+						case disk_type_atx:
+							mounts[i].status = 0xFFFF; // TODO
+							disk_headers[i-1].atr_header.sec_size = 0xFFFF; // TODO
+							disk_headers[i-1].atr_header.flags = 0x1;
+							disk_headers[i-1].atr_header.temp2 = 0xFF;
+							break;
+						default:
+							break;
+					}
+					if(!disk_headers[i-1].atr_header.temp4){
 						led.set_rgb(255,0,0);
 						mounts[i].status = 0;
 						mounts[i].mounted = false;
@@ -1026,14 +1062,34 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					to_read = 12;
 					break;
 				case 'R': // read sector
-					r = check_drive_and_sector_status(drive_number, &offset, &to_read);
-					uart_putc_raw(uart1, r);
-					if(r == 'N') break;
-					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false)) != FR_OK) {
-						// ~0x10 record not found? Should this even be reported?
-						disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
-					} else {
-						disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
+					switch(disk_headers[drive_number-1].atr_header.temp4) {
+						case disk_type_atr:
+							r = check_drive_and_sector_status(drive_number, &offset, &to_read);
+							uart_putc_raw(uart1, r);
+							if(r == 'N') break;
+							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read , false)) != FR_OK)
+								// ~0x10 record not found? Should this even be reported?
+								disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+							else
+								disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
+							break;
+						case disk_type_xex:
+							memset(sector_buffer, 0, 128);
+							// TODO
+							if(sio_command.sector_number >= 0x171) {
+									bytes_read = to_read;
+									offset = (sio_command.sector_number-0x171);
+									to_read = 125; // TODO
+									offset = sio_command.sector_number;
+							} else {
+								// TODO
+								// XEX and sector <= 0x170
+							}
+							break;
+						case disk_type_atx:
+							break;
+						default:
+							break;
 					}
 					break;
 				case 'O': // write percom
@@ -1124,94 +1180,91 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 			}
-		} else {
-			offset = mounts[0].status;
-			if(mounts[0].mounted && offset && offset < cas_size &&
-				(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
-					(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
-				to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
-				if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
-					mounts[0].mounted = false;
-					mounts[0].status = 0;
-					continue;
-				}
-				offset += to_read;
-				cas_block_index += to_read;
-				mounts[0].status = offset;
+		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
+			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
+				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
+			to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
+			if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
+				mounts[0].mounted = false;
+				mounts[0].status = 0;
+				continue;
+			}
+			offset += to_read;
+			cas_block_index += to_read;
+			mounts[0].status = offset;
 #ifdef PICO_UART
-				gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
+			gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
 #endif
-				uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
-				while(silence_duration > 0) {
-					uint16_t silence_block_len = silence_duration;
-					if(silence_block_len >= max_clock_ms)
-						silence_block_len = max_clock_ms;
-					pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
-					silence_duration -= silence_block_len;
-				}
-				int bs, be, bd;
-				uint8_t b;
-				uint16_t ld;
-				for(i=0; i < to_read; i += cas_block_multiple) {
-					switch(cas_header.signature) {
-						case cas_header_data:
-							pio_enqueue(0, cas_sample_duration);
-							b = sector_buffer[i];
-							for(int j=0; j!=8; j++) {
-								pio_enqueue(b & 0x1, cas_sample_duration);
-								b >>= 1;
-							}
-							pio_enqueue(1, cas_sample_duration);
-							break;
-						case cas_header_fsk:
-						case cas_header_pwml:
-							ld = *(uint16_t *)&sector_buffer[i];
-							// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-							if(ld != 0) {
-								pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
-							}
-							cas_fsk_bit ^= 1;
-							break;
-						case cas_header_pwmc:
-							ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
-							for(uint16_t j=0; j<ld; j++) {
-								pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
-								pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
-							}
-							break;
-						case cas_header_pwmd:
-							b = sector_buffer[i];
-							if (pwm_bit_order) {
-								bs=7; be=-1; bd=-1;
-							} else {
-								bs=0; be=8; bd=1;
-							}
-							for(int j=bs; j!=be; j += bd) {
-								uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
-								pio_enqueue(pwm_bit, d*pwm_sample_duration);
-								pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
-							}
-							break;
-						default:
-							break;
-					}
-				}
-				if(cas_block_index == cas_header.chunk_length) {
-					if(offset < cas_size && mounts[0].mounted) {
-						if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
-							offset = cas_read_forward(&fil, offset);
+			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
+			while(silence_duration > 0) {
+				uint16_t silence_block_len = silence_duration;
+				if(silence_block_len >= max_clock_ms)
+					silence_block_len = max_clock_ms;
+				pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
+				silence_duration -= silence_block_len;
+			}
+			int bs, be, bd;
+			uint8_t b;
+			uint16_t ld;
+			for(i=0; i < to_read; i += cas_block_multiple) {
+				switch(cas_header.signature) {
+					case cas_header_data:
+						pio_enqueue(0, cas_sample_duration);
+						b = sector_buffer[i];
+						for(int j=0; j!=8; j++) {
+							pio_enqueue(b & 0x1, cas_sample_duration);
+							b >>= 1;
 						}
-						f_close(&fil);
-						f_mount(0, "", 1);
-						mounts[0].status = offset;
-						if(!offset)
-							mounts[0].mounted = false;
+						pio_enqueue(1, cas_sample_duration);
+						break;
+					case cas_header_fsk:
+					case cas_header_pwml:
+						ld = *(uint16_t *)&sector_buffer[i];
+						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
+						if(ld != 0) {
+							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
+						}
+						cas_fsk_bit ^= 1;
+						break;
+					case cas_header_pwmc:
+						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
+						for(uint16_t j=0; j<ld; j++) {
+							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
+							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
+						}
+						break;
+					case cas_header_pwmd:
+						b = sector_buffer[i];
+						if (pwm_bit_order) {
+							bs=7; be=-1; bd=-1;
+						} else {
+							bs=0; be=8; bd=1;
+						}
+						for(int j=bs; j!=be; j += bd) {
+							uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
+							pio_enqueue(pwm_bit, d*pwm_sample_duration);
+							pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
+						}
+						break;
+					default:
+						break;
+				}
+			}
+			if(cas_block_index == cas_header.chunk_length) {
+				if(offset < cas_size && mounts[0].mounted) {
+					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+						offset = cas_read_forward(&fil, offset);
 					}
-					if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
-						while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
-							tight_loop_contents();
-						sleep_ms(10);
-					}
+					f_close(&fil);
+					f_mount(0, "", 1);
+					mounts[0].status = offset;
+					if(!offset)
+						mounts[0].mounted = false;
+				}
+				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
+						tight_loop_contents();
+					sleep_ms(10);
 				}
 			}
 		}
