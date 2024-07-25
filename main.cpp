@@ -349,7 +349,7 @@ size_t get_filename_ext(char *filename) {
 	return (i == 0 || l-i > 4) ? l : i+1;
 }
 
-enum file_type {none, boot, disk, casette};
+enum file_type {none, disk, casette};
 file_type ft = file_type::none;
 
 bool is_valid_file(char *filename) {
@@ -357,9 +357,8 @@ bool is_valid_file(char *filename) {
 	switch(ft) {
 		case file_type::casette:
 			return strcasecmp(&filename[i], "CAS") == 0;
-		case file_type::boot:
 		case file_type::disk:
-			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || (ft == file_type::boot ? strcasecmp(&filename[i], "XEX") == 0 : 0);
+			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || strcasecmp(&filename[i], "XEX") == 0  || strcasecmp(&filename[i], "COM") == 0;
 		default:
 			return false;
 	}
@@ -449,9 +448,7 @@ std::string str_cas = "C:  <EMPTY>   ";
 const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0};
 const file_type menu_to_type[] = {
 	file_type::none,
-	// TODO With e.g. U1MB theoretically all D: are bootable, but then the (kboot?) XEX loader
-	// needs to account for the drive number.
-	file_type::boot, file_type::disk, file_type::disk, file_type::disk,
+	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
 	file_type::none, file_type::none,
 	file_type::casette
 };
@@ -777,17 +774,12 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 }
 */
 
-// byte0 = drive
-// byte4 = correct cs
-// byte1 = read sector 'R'
-// byte2+3 = sector number
-
 const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
 const uint hsio_opt_to_baud_ntsc[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
 const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
 // const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
-uint8_t high_speed = 0;
+bool high_speed = false;
 uint8_t current_speed_index = 0;
 
 typedef struct __attribute__((__packed__)) {
@@ -822,7 +814,6 @@ bool try_get_sio_command() {
 	int i=0;
 	memset(&sio_command, 0x00, 4);
 	sio_command.checksum = 0xFF;
-	//if(uart_is_readable(uart1))
 	// TODO the 2.5 ms timeout dep current SIO speed?
 	while(i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr)
 		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
@@ -839,8 +830,11 @@ bool try_get_sio_command() {
 		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
 	else
 		r = false;
-	if(status_byte && current_options[hsio_option_index] && high_speed) {
-		current_speed_index ^= current_options[hsio_option_index];
+	if(status_byte && high_speed) {
+		if(current_speed_index)
+			current_speed_index = 0;
+		else
+			current_speed_index = current_options[hsio_option_index];
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 	}
 	absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
@@ -877,12 +871,13 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	int i=0;
 	uint8_t r = 'A';
 	uint8_t status = 0;
+	// TODO enough timeout here?
 	while(i<to_read && uart_is_readable_within_us(uart1, 2500))
 		sector_buffer[i++] = (uint8_t)uart_get_hw(uart1)->dr;
 	if(i!=to_read || !uart_is_readable_within_us(uart1, 2500)) {
 		status |= 0x01;
 		r = 'N';
-	}else if(uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
+	}else if((uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
 		status |= 0x02;
 		r = 'N';
 	}
@@ -903,9 +898,15 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 			break;
 		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
 			break;
-		f_op_stat = op_write ?
-			f_write(&fil, data, to_transfer, &bytes_transferred) :
-			f_read(&fil, data, to_transfer, &bytes_transferred);
+		if(op_write) {
+			multicore_lockout_start_blocking();
+			f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
+			f_op_stat = f_sync(&fil);
+			multicore_lockout_end_blocking();
+		} else {
+			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
+
+		}
 		if(f_op_stat != FR_OK)
 			break;
 		if(bytes_transferred != to_transfer || !mounts[drive_number].mounted)
@@ -950,23 +951,17 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						led.set_rgb(0,255,0);
 					}
 				} else {
-					// disk_headers[x].atr_header.{sec_size,pars, pars_high, magic}
-					// TODO split this into ATR, ATX, and XEX
-					// how to hold the file type information efficiently
-					// read two bytes first?
-					// ATX starts with AT8X
-					// XEX starts with 0xFF 0xFF
-					disk_headers[i-1].atr_header.temp4 = 0;
+					uint8_t disk_type = 0;
 					if(f_read(&fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
 						if(*(uint16_t *)sector_buffer == 0x0296) // ATR magic
-							disk_headers[i-1].atr_header.temp4 = disk_type_atr;
+							disk_type = disk_type_atr;
 						else if(*(uint16_t *)sector_buffer == 0xFFFF)
-							disk_headers[i-1].atr_header.temp4 = disk_type_xex;
+							disk_type = disk_type_xex;
 						else if(*(uint32_t *)sector_buffer == 0x58385441) // AT8X
-							disk_headers[i-1].atr_header.temp4 = disk_type_atx;
+							disk_type = disk_type_atx;
 						f_lseek(&fil, 0);
 					}
-					switch(disk_headers[i-1].atr_header.temp4) {
+					switch(disk_type) {
 						case disk_type_atr:
 							if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
 								mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
@@ -974,10 +969,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
 								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 									disk_headers[i-1].atr_header.flags |= 0x1;
-								disk_headers[i-1].atr_header.temp4 = disk_type_atr;
 								led.set_rgb(0,255,0);
 							} else {
-								disk_headers[i-1].atr_header.temp4 = 0;
+								disk_type = 0;
 							}
 							break;
 						case disk_type_xex:
@@ -1003,10 +997,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						default:
 							break;
 					}
-					if(!disk_headers[i-1].atr_header.temp4) {
+					if(!disk_type) {
 						led.set_rgb(255,0,0);
 						mounts[i].status = 0;
 						mounts[i].mounted = false;
+					} else {
+						disk_headers[i-1].atr_header.temp4 = disk_type;
 					}
 				}
 				f_close(&fil);
@@ -1107,6 +1103,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							}
 							break;
 						case disk_type_atx:
+							// TODO
 							break;
 						default:
 							break;
@@ -1118,11 +1115,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
-					to_read = 12;
-					r = try_receive_data(drive_number, to_read);
+					// to_read = 12;
+					r = try_receive_data(drive_number, 12);
 					if(r == 'A' && !compare_percom(drive_number))
 						r = 'N';
+						// to_read = 0;
 					sleep_us(850);
+					//sleep_us(2000);
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
 					 // Mark that PERCOM has been written successfully
@@ -1133,26 +1132,31 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				case 'W': // write (+verify) sector
 					r = check_drive_and_sector_status(drive_number, &offset, &to_read, true);
 					uart_putc_raw(uart1, r);
-					if(r == 'N') break;
+					if(r == 'N') {
+						// to_read = 0;
+						break;
+					}
 					r = try_receive_data(drive_number, to_read);
 					sleep_us(850);
+					//sleep_us(1000);
 					uart_putc_raw(uart1, r);
-					if(r == 'N') break;
+					if(r == 'N') {
+						// to_read = 0;
+						break;
+					}
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
 						disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
-						break;
 					} else if (sio_command.command_id == 'W') {
-						if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false, to_read)) != FR_OK)
-							break;
-						if(memcmp(sector_buffer, &sector_buffer[to_read], to_read)) {
+						f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, false, to_read);
+						if(f_op_stat != FR_OK || memcmp(sector_buffer, &sector_buffer[to_read], to_read)) {
 							f_op_stat = FR_INT_ERR;
-							break;
+							disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 						}
 					}
 					to_read = 0;
 					break;
-				case '!':
-				case '"':
+				case '!': // Format SD / PERCOM
+				case '"': // Format ED
 					i = sio_command.command_id - 0x21;
 					if(!mounts[drive_number].mounted ||
 						(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
@@ -1192,12 +1196,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				uart_tx_wait_blocking(uart1);
 			}
 			if(sio_command.command_id == '?') {
-				if(current_options[hsio_option_index]) {
-					high_speed = 1;
-					current_speed_index = current_options[hsio_option_index];
-				}else{
-					high_speed = 0;
-				}
+				high_speed = (current_options[hsio_option_index] > 0);
+				current_speed_index = current_options[hsio_option_index];
 				uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 			}
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
@@ -1673,7 +1673,7 @@ void get_file(file_type t, int file_entry_index) {
 						strcpy((char *)mounts[file_entry_index].mount_path, &curr_path[0]);
 						strcpy((char *)&(mounts[file_entry_index].mount_path[i]), f);
 						i = 0;
-						int si = (ft == file_type::disk || ft == file_type::boot) ? 3 : 2;
+						int si = (ft == file_type::disk) ? 3 : 2;
 						while(i<12) {
 							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
 							i++;
@@ -1849,6 +1849,7 @@ restart_options:
 int main() {
 	// stdio_init_all();
 	// set_sys_clock_khz(250000, true);
+	multicore_lockout_victim_init();
 	led.set_rgb(0, 0, 0);
 	st7789.set_backlight(255);
 
