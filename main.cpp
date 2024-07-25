@@ -35,6 +35,8 @@
 
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
+#include "boot_loader.h"
+
 
 #define PICO_UART
 
@@ -486,13 +488,7 @@ volatile mounts_type mounts[] = {
 	{.str=&str_d4, .mount_path=d4_mount, .mounted=false, .status = 0}
 };
 
-/*
-  // Init serial port to 19200 baud
-  // Blocking lock for FS access?
-  // go through mounts that are true and status 0: try to validate the file and set status accordingly
-
-  // otherwise, check if command line low and serial read waiting, act accordingly
-*/
+// TODO Blocking lock for FS access?
 
 const size_t sector_buffer_size = 512;
 uint8_t sector_buffer[sector_buffer_size];
@@ -526,7 +522,6 @@ uint32_t cas_sample_duration; // in cycles dep the base timing value
 uint16_t silence_duration; // in ms
 uint16_t cas_block_index;
 uint16_t cas_block_multiple;
-// uint16_t dsk_baudrate = 19200;
 uint8_t cas_fsk_bit;
 
 volatile bool cas_block_turbo;
@@ -712,6 +707,8 @@ uint turbo_data_pin;
 //const uint turbo_data_pin = interrupt_pin;
 
 const PIO cas_pio = pio0;
+const auto GPIO_FUNC_PIOX = GPIO_FUNC_PIO0;
+
 uint sm, sm_turbo;
 pio_sm_config sm_config_turbo;
 int8_t turbo_conf[] = {-1, -1, -1};
@@ -846,8 +843,8 @@ bool try_get_sio_command() {
 		current_speed_index ^= current_options[hsio_option_index];
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
 	}
-	absolute_time_t t = make_timeout_time_ms(1); // According to Avery's manual 950us
-	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) < 0)
+	absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
+	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 		tight_loop_contents();
 	return r && gpio_get(command_line_pin);
 }
@@ -974,10 +971,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
 								mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 								disk_headers[i-1].atr_header.temp2 = 0xFF;
-								// Whatever the ATR flag says, if the file itself is read-only,
 								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
 								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 									disk_headers[i-1].atr_header.flags |= 0x1;
+								disk_headers[i-1].atr_header.temp4 = disk_type_atr;
 								led.set_rgb(0,255,0);
 							} else {
 								disk_headers[i-1].atr_header.temp4 = 0;
@@ -990,7 +987,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.pars_high = offset % 125;
 							if(!disk_headers[i-1].atr_header.pars_high)
 								disk_headers[i-1].atr_header.pars_high = 125;
-							// This incidentally can be a proper SD or ED disk
+							// Note, this incidentally can be a proper SD or ED disk,
+							// but this is perfectly OK
 							mounts[i].status = (disk_headers[i-1].atr_header.pars+3+0x170)*128;
 							disk_headers[i-1].atr_header.sec_size = 128;
 							disk_headers[i-1].atr_header.flags = 0x1;
@@ -1005,7 +1003,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						default:
 							break;
 					}
-					if(!disk_headers[i-1].atr_header.temp4){
+					if(!disk_headers[i-1].atr_header.temp4) {
 						led.set_rgb(255,0,0);
 						mounts[i].status = 0;
 						mounts[i].mounted = false;
@@ -1081,11 +1079,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
-							memset(sector_buffer, 0, 128);
 							if(sio_command.sector_number >= 0x171) {
 									bytes_read = to_read;
 									offset = (sio_command.sector_number-0x171);
-									if(offset == disk_headers[drive_number-1].atr_header.pars-1) {
+									if(offset == disk_headers[drive_number-1].atr_header.pars - 1) {
 										to_read = disk_headers[drive_number-1].atr_header.pars_high;
 									} else {
 										sector_buffer[125]=((sio_command.sector_number+1)>>8) & 0xFF;
@@ -1098,10 +1095,15 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 										disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 									else
 										disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
-									to_read = bytes_read;
+									to_read = bytes_read; // That should be simply 128
 							} else {
-								// TODO
-								// XEX and sector <= 0x170
+								if(sio_command.sector_number <= 2) {
+									// TODO modify to relocate
+									memcpy(sector_buffer, &boot_loader[128*(sio_command.sector_number-1)], 128);
+									to_read = 128;
+								} else {
+									// 0x169, 0x170 - VTOC and directory
+								}
 							}
 							break;
 						case disk_type_atx:
@@ -1211,7 +1213,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			cas_block_index += to_read;
 			mounts[0].status = offset;
 #ifdef PICO_UART
-			gpio_set_function(sio_tx_pin, GPIO_FUNC_SIO);
+			gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
 #endif
 			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
 			while(silence_duration > 0) {
