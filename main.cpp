@@ -780,7 +780,7 @@ const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 1
 // PAL/NTSC average
 // const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
 bool high_speed = false;
-uint8_t current_speed_index = 0;
+// uint8_t current_speed_index = 0;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
@@ -803,43 +803,40 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 	return cksum;
 }
 
+const uint32_t serial_read_timeout = 5000;
+const uint16_t desync_retries = 3;
+
 bool try_get_sio_command() {
-	// Assumption - casette motor is on the active command line
+	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
+	static uint16_t desync = 0;
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
 		return false;
-	uint8_t status_byte = 0;
 	bool r = true;
 	int i=0;
-	memset(&sio_command, 0x00, 4);
-	sio_command.checksum = 0xFF;
-	// TODO the 2.5 ms timeout dep current SIO speed?
-	while(i<5 && uart_is_readable_within_us(uart1, 2500) && !uart_get_hw(uart1)->rsr)
+	memset(&sio_command, 0x01, 5);
+	while(i<5 && uart_is_readable_within_us(uart1, serial_read_timeout) && !uart_get_hw(uart1)->rsr)
 		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
-	if(uart_get_hw(uart1)->rsr || i != 5) {
+	if(gpio_get(command_line_pin) || uart_get_hw(uart1)->rsr || i != 5 ||
+			sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || sio_command.command_id < 0x21) {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
-		status_byte |= 0x1; // Command frame error
-	}
-	if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum) {
+		desync++;
+	} else
+		desync = 0;
+	if(!desync && (sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted))
 		r = false;
-		status_byte |= 0x2; // Checksum error
+	if(desync == desync_retries && current_options[hsio_option_index]) {
+		high_speed = !high_speed;
+		desync = high_speed ? current_options[hsio_option_index] : 0;
+		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[desync] : hsio_opt_to_baud_pal[desync]);
+		desync = 0;
+	}else if(!desync) {
+		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
+		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
+			tight_loop_contents();
 	}
-	if(sio_command.device_id >= 0x31 && sio_command.device_id <= 0x34)
-		disk_headers[sio_command.device_id-0x31].atr_header.temp1 = status_byte;
-	else
-		r = false;
-	if(status_byte && high_speed) {
-		if(current_speed_index)
-			current_speed_index = 0;
-		else
-			current_speed_index = current_options[hsio_option_index];
-		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
-	}
-	absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
-	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
-		tight_loop_contents();
 	return r && gpio_get(command_line_pin);
 }
 
@@ -871,10 +868,9 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	int i=0;
 	uint8_t r = 'A';
 	uint8_t status = 0;
-	// TODO enough timeout here?
-	while(i<to_read && uart_is_readable_within_us(uart1, 2500))
+	while(i<to_read && uart_is_readable_within_us(uart1, serial_read_timeout))
 		sector_buffer[i++] = (uint8_t)uart_get_hw(uart1)->dr;
-	if(i!=to_read || !uart_is_readable_within_us(uart1, 2500)) {
+	if(i!=to_read || !uart_is_readable_within_us(uart1, serial_read_timeout)) {
 		status |= 0x01;
 		r = 'N';
 	}else if((uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
@@ -944,12 +940,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
-					if(!mounts[i].status) {
+					if(!mounts[i].status)
 						mounts[i].mounted = false;
-						led.set_rgb(255,0,0);
-					}else{
-						led.set_rgb(0,255,0);
-					}
 				} else {
 					uint8_t disk_type = 0;
 					if(f_read(&fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
@@ -969,10 +961,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
 								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
 									disk_headers[i-1].atr_header.flags |= 0x1;
-								led.set_rgb(0,255,0);
-							} else {
+							} else
 								disk_type = 0;
-							}
 							break;
 						case disk_type_xex:
 							// Sectors occupied by the file itself
@@ -998,23 +988,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							break;
 					}
 					if(!disk_type) {
-						led.set_rgb(255,0,0);
 						mounts[i].status = 0;
 						mounts[i].mounted = false;
-					} else {
+					} else
 						disk_headers[i-1].atr_header.temp4 = disk_type;
-					}
 				}
 				f_close(&fil);
 			}
 			f_mount(0, "", 1);
 		}
 
-		// uart_is_readable(uart1);
-		// uart_write_blocking(uart1, uint8_t *, size t);
-		// uart_read_blocking(uart1, uint8_t *, size t);
-		// *dst++ = (uint8_t) uart_get_hw(uart)->dr;
-		// uart_is_readable_within_us(uart_inst_t *uart, uint32_t us);
 		if(try_get_sio_command()) {
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
 #ifdef PICO_UART
@@ -1034,17 +1017,17 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					// not only when the disk is in), or???
 					sector_buffer[0] = disk_headers[drive_number-1].atr_header.temp1;
 					sector_buffer[1] = disk_headers[drive_number-1].atr_header.temp2;
-					if(mounts[drive_number].mounted) {
-						sector_buffer[0] |= 0x10; // motor on
-						if(disk_headers[drive_number-1].atr_header.flags & 0x1)
-							sector_buffer[0] |= 0x08; // write protect
-						if(disk_headers[drive_number-1].atr_header.sec_size == 256)
-							sector_buffer[0] |= 0x20;
-						else if(mounts[drive_number].status == 0x20800) // 1040*128
-							sector_buffer[0] |= 0x80; // medium density
-					} else {
-						sector_buffer[1] &= 0x7F; // disk removed
-					}
+					//if(mounts[drive_number].mounted) {
+					sector_buffer[0] |= 0x10; // motor on
+					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+						sector_buffer[0] |= 0x08; // write protect
+					if(disk_headers[drive_number-1].atr_header.sec_size == 256)
+						sector_buffer[0] |= 0x20;
+					else if(mounts[drive_number].status == 0x20800) // 1040*128
+						sector_buffer[0] |= 0x80; // medium density
+					//} else {
+					//	sector_buffer[1] &= 0x7F; // disk removed
+					//}
 					sector_buffer[2] = 0xe0;
 					sector_buffer[3] = 0x0;
 					break;
@@ -1115,35 +1098,26 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
-					// to_read = 12;
 					r = try_receive_data(drive_number, 12);
 					if(r == 'A' && !compare_percom(drive_number))
 						r = 'N';
-						// to_read = 0;
 					sleep_us(850);
-					//sleep_us(2000);
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
 					 // Mark that PERCOM has been written successfully
 					disk_headers[drive_number-1].atr_header.temp3 |= 0x04;
-					to_read = 0;
 					break;
 				case 'P': // put sector
 				case 'W': // write (+verify) sector
 					r = check_drive_and_sector_status(drive_number, &offset, &to_read, true);
 					uart_putc_raw(uart1, r);
-					if(r == 'N') {
-						// to_read = 0;
+					if(r == 'N')
 						break;
-					}
 					r = try_receive_data(drive_number, to_read);
 					sleep_us(850);
-					//sleep_us(1000);
 					uart_putc_raw(uart1, r);
-					if(r == 'N') {
-						// to_read = 0;
+					if(r == 'N')
 						break;
-					}
 					if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
 						disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 					} else if (sio_command.command_id == 'W') {
@@ -1174,7 +1148,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[0] = sector_buffer[1] = 0xFF;
 					break;
 				case '?': // get speed index
+					if(!current_options[hsio_option_index])
+						r = 'N';
 					uart_putc_raw(uart1, r);
+					if(r == 'N') break;
 					sector_buffer[0] = hsio_opt_to_index[current_options[hsio_option_index]];
 					to_read = 1;
 					break;
@@ -1194,11 +1171,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_putc_raw(uart1, sio_checksum(sector_buffer, to_read));
 				}
 				uart_tx_wait_blocking(uart1);
-			}
-			if(sio_command.command_id == '?') {
-				high_speed = (current_options[hsio_option_index] > 0);
-				current_speed_index = current_options[hsio_option_index];
-				uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[current_speed_index] : hsio_opt_to_baud_pal[current_speed_index]);
+				// TODO Try without this and rely on command frame repeat procedure?
+				if(sio_command.command_id == '?') {
+					high_speed = true;
+					r = current_options[hsio_option_index];
+					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
+				}
 			}
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
@@ -1299,7 +1277,6 @@ void core1_entry() {
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
-	// gpio_set_function(turbo_data_pin, GPIO_FUNC_SIO);
 
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
 
@@ -1312,7 +1289,6 @@ void core1_entry() {
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 	sm_config_set_clkdiv(&c, clk_divider);
-	// sm_config_set_set_pins(&c, uart1_tx_pin, 1);
 	sm_config_set_out_pins(&c, sio_tx_pin, 1);
 	sm_config_set_out_shift(&c, true, true, 32);
 	pio_sm_init(cas_pio, sm, pio_offset, &c);
@@ -1322,10 +1298,9 @@ void core1_entry() {
 
 	sm_config_turbo = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&sm_config_turbo, PIO_FIFO_JOIN_TX);
-	// if(set_clock_div)
 	sm_config_set_clkdiv(&sm_config_turbo, clk_divider);
 	sm_config_set_out_shift(&sm_config_turbo, true, true, 32);
-	// sm_config_set_set_pins(&c1, turbo_data_pin, 1);
+
 	check_turbo_conf();
 
 	dma_channel = dma_claim_unused_channel(true);
@@ -1347,8 +1322,6 @@ void core1_entry() {
 	irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
 	irq_set_enabled(DMA_IRQ_0, true);
 
-	//gpio_init(sio_rx_pin); gpio_set_dir(sio_rx_pin, GPIO_IN); gpio_pull_up(sio_rx_pin);
-	//gpio_init(sio_tx_pin); gpio_set_dir(sio_tx_pin, GPIO_OUT); gpio_put(sio_tx_pin, 1);
 #ifdef PICO_UART
 	uart_init(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
@@ -1831,10 +1804,14 @@ restart_options:
 				// TODO Save config
 				break;
 			} else {
+				int old_hsio_option = current_options[hsio_option_index];
 				select_option(cursor_position);
+				if(current_options[hsio_option_index] != old_hsio_option) {
+					high_speed = false;
+					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
+				}
 				// TODO process the new option set?
 				// For turbo this is done elsewhere
-				// HSIO is done
 				goto restart_options;
 			}
 		}
