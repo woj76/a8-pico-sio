@@ -807,7 +807,7 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 }
 
 const uint32_t serial_read_timeout = 5000;
-const uint16_t desync_retries = 4;
+const uint16_t desync_retries = 1;
 
 bool try_get_sio_command() {
 	// Assumption - when casette motor is on the active command line
@@ -1041,10 +1041,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'N': // read percom
 					// Only writable (according to our rules) disks react to PERCOM command frames
-					if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
-						r = 'N';
+					//if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
+					//	r = 'N';
 					uart_putc_raw(uart1, r);
-					if(r == 'N') break;
+					//if(r == 'N') break;
 					memcpy(sector_buffer, &percom_table[(disk_headers[drive_number-1].atr_header.temp3 & 0x3)*13], 8);
 					sector_buffer[8] = 0xFF;
 					memset(&sector_buffer[9], 0x00, 3);
@@ -1137,7 +1137,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'O': // write percom
 					// Only writable (according to our rules) disks react to PERCOM command frames
-					if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
+					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
