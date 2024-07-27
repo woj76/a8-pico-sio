@@ -265,8 +265,8 @@ const char *clock_option_names_short[] = {"  PAL", " NTSC"};
 const char *clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
 const char *hsio_option_names_short[] = {"  $28", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
 const char *hsio_option_names_long[] = {"$28 ~19 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
-const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800"};
-const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800"};
+const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800", " $900", " $A00"};
+const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800", "Loader at $900", "Loader at $A00"};
 const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
 const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
 const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
@@ -298,7 +298,7 @@ const option_list option_lists[] = {
 		.long_names = hsio_option_names_long
 	},
 	{
-		.count = 4,
+		.count = 6,
 		.short_names = xex_option_names_short,
 		.long_names = xex_option_names_long
 	},
@@ -774,12 +774,16 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 }
 */
 
+const uint8_t boot_reloc_locs[] = {0x03, 0x0a, 0x0d, 0x12, 0x17, 0x1a, 0x21, 0x2c, 0x33, 0x3e, 0x44, 0x5c, 0x6b, 0x6e, 0x7f, 0x82, 0x87, 0x98, 0x9b, 0xa2, 0xa7, 0xae, 0xb2};
+const int boot_reloc_locs_size = 23;
+const int8_t boot_reloc_delta[] = {0, -2, -1, 1, 2, 3};
+
 const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
 const uint hsio_opt_to_baud_ntsc[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
 const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
 // const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
-volatile bool high_speed = false;
+volatile int8_t high_speed = -1;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
@@ -826,8 +830,8 @@ bool try_get_sio_command() {
 		desync = 0;
 	if(!desync && (sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted))
 		r = false;
-	if(desync == desync_retries && current_options[hsio_option_index]) {
-		high_speed = !high_speed;
+	if(high_speed >= 0 && desync == desync_retries && current_options[hsio_option_index]) {
+		high_speed ^= 1;
 		if(high_speed) {
 			led.set_rgb(0,0,255);
 		} else {
@@ -1063,7 +1067,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
 							if(sio_command.sector_number >= 0x171) {
-									// bytes_read = to_read;
 									offset = (sio_command.sector_number-0x171);
 									if(offset == disk_headers[drive_number-1].atr_header.pars - 1) {
 										to_read = disk_headers[drive_number-1].atr_header.pars_high;
@@ -1081,9 +1084,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 									to_read = 128;
 							} else {
 								if(sio_command.sector_number <= 2) {
-									// TODO modify to relocate
-									memcpy(sector_buffer, &boot_loader[128*(sio_command.sector_number-1)], 128);
-									to_read = 128;
+									offset = 128*(sio_command.sector_number-1);
+									memcpy(sector_buffer, &boot_loader[offset], 128);
+									if(boot_reloc_delta[current_options[xex_option_index]])
+										for(i=0; i<boot_reloc_locs_size; i++)
+											if(boot_reloc_locs[i] >= offset && boot_reloc_locs[i] < offset + 128)
+												sector_buffer[boot_reloc_locs[i]-offset] += boot_reloc_delta[current_options[xex_option_index]];
 								} else {
 									if(sio_command.sector_number == 0x168) { // VTOC
 										uint total_sectors = mounts[drive_number].status >> 7;
@@ -1103,20 +1109,20 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 										sector_buffer[2] = ((file_sectors >> 8) & 0xFF);
 										sector_buffer[3] = 0x71;
 										sector_buffer[4] = 0x01;
-										memset(&sector_buffer[5], ' ', 11);
-										// 'a'-1 or > 'z' -> '@'
-										// 'a'..'z' -> -32 ? Needed?
 										// The file name is guaranteed to have an extension that is 3 characters long
-										int j = 0;
+										memset(&sector_buffer[5], ' ', 8);
+										offset = 0;
 										for(i=0; i<11; i++) {
-											uint8_t c = (*mounts[drive_number].str)[3+j];
+											uint8_t c = (*mounts[drive_number].str)[3+offset];
 											if(c == '.')
 												i = 7;
 											else {
+												// 'a'-1 or > 'z' -> '@'
+												// To uppercase: 'a'..'z' -> -32 Needed?
 												if(c == 'a'-1 || c > 'z') c = '@';
 												sector_buffer[5+i] = c;
 											}
-											j++;
+											offset++;
 										}
 									}
 								}
@@ -1209,7 +1215,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				uart_tx_wait_blocking(uart1);
 				if(sio_command.command_id == '?') {
-					high_speed = true;
+					high_speed = 1;
 					led.set_rgb(0,255,0);
 					r = current_options[hsio_option_index];
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
@@ -1844,7 +1850,7 @@ restart_options:
 				int old_hsio_option = current_options[hsio_option_index];
 				select_option(cursor_position);
 				if(current_options[hsio_option_index] != old_hsio_option) {
-					high_speed = false;
+					high_speed = -1;
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 				}
 				// TODO process the new option set?
