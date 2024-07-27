@@ -1063,7 +1063,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
 							if(sio_command.sector_number >= 0x171) {
-									bytes_read = to_read;
+									// bytes_read = to_read;
 									offset = (sio_command.sector_number-0x171);
 									if(offset == disk_headers[drive_number-1].atr_header.pars - 1) {
 										to_read = disk_headers[drive_number-1].atr_header.pars_high;
@@ -1078,7 +1078,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 										disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 									else
 										disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
-									to_read = bytes_read; // That should be simply 128
+									to_read = 128;
 							} else {
 								if(sio_command.sector_number <= 2) {
 									// TODO modify to relocate
@@ -1104,11 +1104,20 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 										sector_buffer[3] = 0x71;
 										sector_buffer[4] = 0x01;
 										memset(&sector_buffer[5], ' ', 11);
-										// TODO copy and clean up file name from mounts
 										// 'a'-1 or > 'z' -> '@'
-										// 'a'..'z -> -32'
-										sector_buffer[5] = 'T';
-										sector_buffer[13] = 'E';
+										// 'a'..'z' -> -32 ? Needed?
+										// The file name is guaranteed to have an extension that is 3 characters long
+										int j = 0;
+										for(i=0; i<11; i++) {
+											uint8_t c = (*mounts[drive_number].str)[3+j];
+											if(c == '.')
+												i = 7;
+											else {
+												if(c == 'a'-1 || c > 'z') c = '@';
+												sector_buffer[5+i] = c;
+											}
+											j++;
+										}
 									}
 								}
 							}
@@ -1199,7 +1208,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_putc_raw(uart1, sio_checksum(sector_buffer, to_read));
 				}
 				uart_tx_wait_blocking(uart1);
-				// TODO Try without this and rely on command frame repeat procedure?
 				if(sio_command.command_id == '?') {
 					high_speed = true;
 					led.set_rgb(0,255,0);
