@@ -779,8 +779,7 @@ const uint hsio_opt_to_baud_ntsc[] = {19040, 68838, 74575, 81354, 89490, 99433, 
 const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
 // const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
-bool high_speed = false;
-// uint8_t current_speed_index = 0;
+volatile bool high_speed = false;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
@@ -804,7 +803,7 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 }
 
 const uint32_t serial_read_timeout = 5000;
-const uint16_t desync_retries = 3;
+const uint16_t desync_retries = 4;
 
 bool try_get_sio_command() {
 	// Assumption - when casette motor is on the active command line
@@ -829,6 +828,11 @@ bool try_get_sio_command() {
 		r = false;
 	if(desync == desync_retries && current_options[hsio_option_index]) {
 		high_speed = !high_speed;
+		if(high_speed) {
+			led.set_rgb(0,0,255);
+		} else {
+			led.set_rgb(255,0,0);
+		}
 		desync = high_speed ? current_options[hsio_option_index] : 0;
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[desync] : hsio_opt_to_baud_pal[desync]);
 		desync = 0;
@@ -1081,7 +1085,31 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 									memcpy(sector_buffer, &boot_loader[128*(sio_command.sector_number-1)], 128);
 									to_read = 128;
 								} else {
-									// 0x169, 0x170 - VTOC and directory
+									if(sio_command.sector_number == 0x168) { // VTOC
+										uint total_sectors = mounts[drive_number].status >> 7;
+										uint vtoc_sectors = total_sectors >> 10;
+										uint rem = total_sectors - (vtoc_sectors << 10);
+										if(rem > 943) vtoc_sectors += 2;
+										else if(rem) vtoc_sectors++;
+										if(!(vtoc_sectors % 2)) vtoc_sectors++;
+										total_sectors -= (vtoc_sectors + 12);
+										sector_buffer[0] = (uint8_t)((vtoc_sectors + 3)/2);
+										sector_buffer[1] = (total_sectors & 0xFF);
+										sector_buffer[2] = ((total_sectors >> 8) & 0xFF);
+									}else if(sio_command.sector_number == 0x169) { // Directory
+										uint file_sectors = disk_headers[drive_number-1].atr_header.pars;
+										sector_buffer[0] = (file_sectors > 0x28F) ? 0x46 : 0x42;
+										sector_buffer[1] = (file_sectors & 0xFF);
+										sector_buffer[2] = ((file_sectors >> 8) & 0xFF);
+										sector_buffer[3] = 0x71;
+										sector_buffer[4] = 0x01;
+										memset(&sector_buffer[5], ' ', 11);
+										// TODO copy and clean up file name from mounts
+										// 'a'-1 or > 'z' -> '@'
+										// 'a'..'z -> -32'
+										sector_buffer[5] = 'T';
+										sector_buffer[13] = 'E';
+									}
 								}
 							}
 							break;
@@ -1174,6 +1202,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				// TODO Try without this and rely on command frame repeat procedure?
 				if(sio_command.command_id == '?') {
 					high_speed = true;
+					led.set_rgb(0,255,0);
 					r = current_options[hsio_option_index];
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
 				}
