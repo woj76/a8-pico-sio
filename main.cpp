@@ -556,7 +556,7 @@ const uint8_t disk_type_xex = 2;
 const uint8_t disk_type_atx = 3;
 
 
-uint8_t inline locate_percom(int drive_number) {
+uint8_t locate_percom(int drive_number) {
 	int i=0;
 	uint8_t r=0x80;
 	while(i<percom_table_size) {
@@ -570,7 +570,10 @@ uint8_t inline locate_percom(int drive_number) {
 }
 
 bool inline compare_percom(int drive_number) {
-	int i = disk_headers[drive_number-1].atr_header.temp3 & 0x3;
+	int i = disk_headers[drive_number-1].atr_header.temp3;
+	if(i & 0x80)
+		return false;
+	i &= 0x3;
 	if(percom_table[i*13] != sector_buffer[0] || !memcmp(&percom_table[i*13+2], &sector_buffer[2], 6))
 		return false;
 	return true;
@@ -966,9 +969,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
 								mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 								disk_headers[i-1].atr_header.temp2 = 0xFF;
-								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
-								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO) || (disk_headers[i-1].atr_header.temp3 & 0x80))
+								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO))
 									disk_headers[i-1].atr_header.flags |= 0x1;
+								disk_headers[i-1].atr_header.temp3 = locate_percom(i);
 							} else
 								disk_type = 0;
 							break;
@@ -979,18 +982,22 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.pars_high = offset % 125;
 							if(!disk_headers[i-1].atr_header.pars_high)
 								disk_headers[i-1].atr_header.pars_high = 125;
-							// Note, this incidentally can be a proper SD or ED disk,
+							// Incidentally this can be a proper SD or ED disk,
 							// but this is perfectly OK
 							mounts[i].status = (disk_headers[i-1].atr_header.pars+3+0x170)*128;
 							disk_headers[i-1].atr_header.sec_size = 128;
 							disk_headers[i-1].atr_header.flags = 0x1;
 							disk_headers[i-1].atr_header.temp2 = 0xFF;
+							disk_headers[i-1].atr_header.temp3 = 0x80;
 							break;
 						case disk_type_atx:
 							mounts[i].status = 0xFFFF; // TODO
 							disk_headers[i-1].atr_header.sec_size = 0xFFFF; // TODO
+							disk_headers[i-1].atr_header.pars = 0xFFFF; // TODO
+							disk_headers[i-1].atr_header.pars_high = 0xFF; // TODO
 							disk_headers[i-1].atr_header.flags = 0x1;
 							disk_headers[i-1].atr_header.temp2 = 0xFF;
+							disk_headers[i-1].atr_header.temp3 = locate_percom(i);
 							break;
 						default:
 							break;
@@ -1040,12 +1047,21 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[3] = 0x0;
 					break;
 				case 'N': // read percom
-					// Only writable (according to our rules) disks react to PERCOM command frames
-					//if(!mounts[drive_number].mounted || (disk_headers[drive_number-1].atr_header.flags & 0x1))
-					//	r = 'N';
 					uart_putc_raw(uart1, r);
-					//if(r == 'N') break;
-					memcpy(sector_buffer, &percom_table[(disk_headers[drive_number-1].atr_header.temp3 & 0x3)*13], 8);
+					if(disk_headers[drive_number-1].atr_header.temp3 & 0x80) {
+						sector_buffer[0] = 1; // # tracks
+						sector_buffer[1] = 3; // step rate
+						offset = disk_headers[i-1].atr_header.sec_size;
+						sector_buffer[6] = (offset >> 8) & 0xFF; // bytes / sec high
+						sector_buffer[7] = offset & 0xFF; // bytes / sec low
+						offset = 3+(mounts[i].status-384)/offset;
+						sector_buffer[2] = (offset >> 8) & 0xFF; // # sectors high
+						sector_buffer[3] = (offset & 0xFF); // # sectors low
+						sector_buffer[4] = 0; // # sides
+						sector_buffer[5] = 4; // record method
+					} else {
+						memcpy(sector_buffer, &percom_table[(disk_headers[drive_number-1].atr_header.temp3 & 0x3)*13], 8);
+					}
 					sector_buffer[8] = 0xFF;
 					memset(&sector_buffer[9], 0x00, 3);
 					to_read = 12;
@@ -1136,8 +1152,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					}
 					break;
 				case 'O': // write percom
-					// Only writable (according to our rules) disks react to PERCOM command frames
-					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
+					// Only writable disks react to PERCOM write command frame
+					if((disk_headers[drive_number-1].atr_header.flags & 0x1) || (disk_headers[drive_number-1].atr_header.temp3 & 0x80))
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
