@@ -245,13 +245,14 @@ const std::string option_names[] = {
 	"Mount RdWr:",
 	"Host Clock:",
 	"HSIO Speed:",
+	"ATX Floppy:",
 	"XEX Loader:",
 	"Turbo Data:",
 	"Turbo When:",
 	"PWM Invert:",
 	"   >> Save <<   "
 };
-const int option_count = 8;
+const int option_count = 9;
 
 typedef struct {
 	const int count;
@@ -263,8 +264,10 @@ const char *mount_option_names_short[] = {"  OFF", "   ON"};
 const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
 const char *clock_option_names_short[] = {"  PAL", " NTSC"};
 const char *clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
-const char *hsio_option_names_short[] = {"  $28", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
-const char *hsio_option_names_long[] = {"$28 ~19 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
+const char *hsio_option_names_short[] = {"  $28", "  $10", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
+const char *hsio_option_names_long[] = {"$28 OFF - Standard", "$10 ~39 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
+const char *atx_option_names_short[] = {" 1050", "  810"};
+const char *atx_option_names_long[] = {"Atari 1050", "Atari 810"};
 const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800", " $900", " $A00"};
 const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800", "Loader at $900", "Loader at $A00"};
 const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
@@ -276,10 +279,11 @@ const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
 const int mount_option_index = 0;
 const int clock_option_index = 1;
 const int hsio_option_index = 2;
-const int xex_option_index = 3;
-const int turbo1_option_index = 4;
-const int turbo2_option_index = 5;
-const int turbo3_option_index = 6;
+const int atx_option_index = 3;
+const int xex_option_index = 4;
+const int turbo1_option_index = 5;
+const int turbo2_option_index = 6;
+const int turbo3_option_index = 7;
 
 const option_list option_lists[] = {
 	{
@@ -293,9 +297,14 @@ const option_list option_lists[] = {
 		.long_names = clock_option_names_long
 	},
 	{
-		.count = 8,
+		.count = 9,
 		.short_names = hsio_option_names_short,
 		.long_names = hsio_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = atx_option_names_short,
+		.long_names = atx_option_names_long
 	},
 	{
 		.count = 6,
@@ -546,7 +555,6 @@ typedef struct __attribute__((__packed__)) {
 typedef union {
 	atr_header_type atr_header;
 	uint8_t data[sizeof(atr_header_type)];
-	// atx_header_type atx_header;
 } disk_header_type;
 
 disk_header_type disk_headers[4];
@@ -782,10 +790,10 @@ const int boot_reloc_locs_size = 23;
 const int8_t boot_reloc_delta[] = {0, -2, -1, 1, 2, 3};
 
 const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
-const uint hsio_opt_to_baud_ntsc[] = {19040, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
-const uint hsio_opt_to_baud_pal[] = {18866, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
+const uint hsio_opt_to_baud_ntsc[] = {19040, 38908, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
+const uint hsio_opt_to_baud_pal[] = {18866, 38553, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
-// const uint hsio_opt_to_baud[] = {18953, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
+// const uint hsio_opt_to_baud[] = {18953, 38731, 68524, 74234, 80983, 89081, 98979, 111351, 127258};
 volatile int8_t high_speed = -1;
 
 typedef struct __attribute__((__packed__)) {
@@ -817,6 +825,7 @@ bool try_get_sio_command() {
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
 	static uint16_t desync = 0;
+	static int last_drive = -1;
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
 		return false;
 	bool r = true;
@@ -829,6 +838,9 @@ bool try_get_sio_command() {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
 		desync++;
+		if(last_drive >= 0) {
+			disk_headers[last_drive].atr_header.temp1 |= 0x01;
+		}
 	} else
 		desync = 0;
 	if(!desync && (sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted))
@@ -847,8 +859,13 @@ bool try_get_sio_command() {
 		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
 		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 			tight_loop_contents();
+		r &= gpio_get(command_line_pin);
+		if(r) {
+			last_drive = sio_command.device_id-0x31;
+			disk_headers[last_drive].atr_header.temp1 = 0x0;
+		}
 	}
-	return r && gpio_get(command_line_pin);
+	return r;
 }
 
 uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool op_write=false) {
@@ -881,10 +898,7 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	uint8_t status = 0;
 	while(i<to_read && uart_is_readable_within_us(uart1, serial_read_timeout))
 		sector_buffer[i++] = (uint8_t)uart_get_hw(uart1)->dr;
-	if(i!=to_read || !uart_is_readable_within_us(uart1, serial_read_timeout)) {
-		status |= 0x01;
-		r = 'N';
-	}else if((uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
+	if(i!=to_read || !uart_is_readable_within_us(uart1, serial_read_timeout) || (uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
 		status |= 0x02;
 		r = 'N';
 	}
@@ -997,7 +1011,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.pars_high = 0xFF; // TODO
 							disk_headers[i-1].atr_header.flags = 0x1;
 							disk_headers[i-1].atr_header.temp2 = 0xFF;
-							disk_headers[i-1].atr_header.temp3 = locate_percom(i);
+							disk_headers[i-1].atr_header.temp3 = locate_percom(i) | (current_options[atx_option_index] ? 0x40 : 0x00);
 							break;
 						default:
 							break;
@@ -1036,9 +1050,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[0] |= 0x10; // motor on
 					if(disk_headers[drive_number-1].atr_header.flags & 0x1)
 						sector_buffer[0] |= 0x08; // write protect
-					if(disk_headers[drive_number-1].atr_header.sec_size == 256)
+					if(disk_headers[drive_number-1].atr_header.sec_size == 256) {
 						sector_buffer[0] |= 0x20;
-					else if(mounts[drive_number].status == 0x20800) // 1040*128
+						if(disk_headers[drive_number-1].atr_header.temp3 & 0x03 == 0x03)
+							sector_buffer[0] |= 0x40;
+					} else if(mounts[drive_number].status == 0x20800) // 1040*128
 						sector_buffer[0] |= 0x80; // medium density
 					//} else {
 					//	sector_buffer[1] &= 0x7F; // disk removed
@@ -1731,7 +1747,7 @@ get_file_exit:
 
 void update_selection_entry(const char **opt_names, int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+i)*12*font_scale;
+	text_location.y = (2+i)*10*font_scale; // TODO start lower?
 	if(erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
@@ -1799,7 +1815,8 @@ void select_option(int opt_num) {
 
 void update_options_entry(int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+i)*12*font_scale;
+	text_location.y = (2+i)*10*font_scale; // TODO start lower?
+	// TODO bring back?
 	//if(i == option_count-1)
 	//	text_location.y += 4*font_scale;
 	if(erase) {
