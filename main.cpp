@@ -19,6 +19,8 @@
 #include "pico/time.h"
 #include "pico/rand.h"
 #include "hardware/uart.h"
+#include "hardware/sync.h"
+#include "hardware/flash.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
 #include "hardware/irq.h"
@@ -1239,6 +1241,42 @@ atx_error:
 	return r;
 }
 
+volatile bool save_config_flag = false;
+volatile bool save_path_flag = false;
+
+const uint32_t flash_save_offset = 0x100000-4096;
+const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
+const size_t flash_config_offset = 256;
+const size_t flash_check_sig_offset = flash_config_offset+128;
+const uint32_t config_magic = 0xDEADBEEF;
+
+void inline check_and_load_config(bool reset_config) {
+	if(!reset_config && *(uint32_t *)&flash_config_pointer[flash_check_sig_offset] == config_magic) {
+		memcpy(curr_path, flash_config_pointer, 256);
+		memcpy(current_options, &flash_config_pointer[flash_config_offset], option_count-1);
+	} else {
+		save_path_flag = true;
+		save_config_flag = true;
+	}
+}
+
+void inline check_and_save_config() {
+	if(!save_path_flag && !save_config_flag)
+		return;
+	memset(sector_buffer, 0, sector_buffer_size);
+	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : flash_config_pointer, 256);
+	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
+	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
+	multicore_lockout_start_blocking();
+	uint32_t ints = save_and_disable_interrupts();
+	flash_range_erase(flash_save_offset, 4096);
+	flash_range_program(flash_save_offset, (uint8_t *)sector_buffer, sector_buffer_size);
+	restore_interrupts(ints);
+	multicore_lockout_end_blocking();
+	save_path_flag = false;
+	save_config_flag = false;
+}
+
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
@@ -1647,7 +1685,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sleep_ms(10);
 				}
 			}
-		}
+		}else
+			check_and_save_config();
 	}
 }
 
@@ -2208,7 +2247,7 @@ restart_options:
 			break;
 		}else if(button_a.read()) {
 			if(cursor_position == option_count-1) {
-				// TODO Save config
+				save_config_flag = true;
 				break;
 			} else {
 				int old_hsio_option = current_options[hsio_option_index];
@@ -2265,6 +2304,8 @@ int main() {
 		sleep_ms(1000/60);
 	}while(boot_time <= usb_boot_delay);
 
+	check_and_load_config(button_b.read());
+
 	tud_mount_cb();
 	multicore_launch_core1(core1_entry);
 	// bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS;
@@ -2292,6 +2333,7 @@ int main() {
 				update_main_menu();
 			}else{
 				get_file(menu_to_type[cursor_position], d);
+				save_path_flag = true;
 				update_main_menu();
 			}
 
