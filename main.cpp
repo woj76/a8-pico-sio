@@ -1014,16 +1014,11 @@ struct __attribute__((__packed__)) atxTrackChunk {
     uint16_t data;
 };
 
-struct __attribute__((__packed__)) atxTrackInfo {
-	uint32_t offset; // absolute position within file for start of track header
-};
-
 const uint16_t atx_version = 0x01;
 const size_t max_track = 42;
-const int atx_drive_number = 0;
+// const int atx_drive_number = 0;
 
 const int au_full_rotation = 26042; // number of angular units in a full disk rotation
-// #define MS_ANGULAR_UNIT_VAL      0.007999897601 // number of ms for each angular unit
 const uint us_drive_request_delay = 3220; // number of microseconds drive takes to process a request
 const uint ms_crc_calculation = 2; // number of milliseconds to calculate CRC
 const uint us_track_step_810 = 5300; // number of microseconds drive takes to step 1 track
@@ -1037,11 +1032,10 @@ const uint8_t mask_fdc_missing = 0x10; // mask for checking FDC status "missing"
 const uint8_t mask_extended_data = 0x40; // mask for checking FDC status extended data bit
 const uint8_t mask_reserved = 0x80;
 
-
-uint8_t atx_track_size; // number of sectors in each track
-uint16_t gLastAngle;
-uint8_t gCurrentHeadTrack;
-struct atxTrackInfo gTrackInfo[max_track]; // pre-calculated info for each track
+uint8_t atx_track_size[4]; // number of sectors in each track
+uint32_t gTrackInfo[4][max_track]; // pre-calculated info for each track
+uint16_t gLastAngle[4];
+uint8_t gCurrentHeadTrack[4] = {0};
 
 uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
 	uint16_t ret = start + delta;
@@ -1067,9 +1061,7 @@ void waitForAngularPosition(uint16_t pos) {
 */
 }
 
-// TODO allow ATX only in slot D1
-
-bool loadAtxFile(FIL *fil) {
+bool loadAtxFile(FIL *fil, int atx_drive_number) {
 	struct atxFileHeader *fileHeader;
 	struct atxTrackHeader *trackHeader;
 	uint bytes_read;
@@ -1082,7 +1074,7 @@ bool loadAtxFile(FIL *fil) {
 	if (fileHeader->version != atx_version || fileHeader->minVersion != atx_version)
 		return false;
 
-	atx_track_size = (fileHeader->density == atx_medium) ? 26 : 18;
+	atx_track_size[atx_drive_number] = (fileHeader->density == atx_medium) ? 26 : 18;
 	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
 
 	uint32_t startOffset = fileHeader->startData;
@@ -1092,13 +1084,13 @@ bool loadAtxFile(FIL *fil) {
 		if(f_read(fil, sector_buffer, sizeof(struct atxTrackHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxTrackHeader))
 			break;
 		trackHeader = (struct atxTrackHeader *) sector_buffer;
-		gTrackInfo[track].offset = startOffset;
+		gTrackInfo[atx_drive_number][track] = startOffset;
 		startOffset += trackHeader->size;
 	}
 	return true;
 }
 
-bool loadAtxSector(uint16_t num, uint8_t *status) {
+bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	struct atxTrackHeader *trackHeader;
 	struct atxSectorListHeader *slHeader;
 	struct atxSectorHeader *sectorHeader;
@@ -1116,8 +1108,8 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 	bool is1050 = (disk_headers[atx_drive_number].atr_header.temp3 & 0x40) ? false : true;
 
 	// calculate track and relative sector number from the absolute sector number
-	uint8_t tgtTrackNumber = (num - 1) / atx_track_size + 1;
-	uint8_t tgtSectorNumber = (num - 1) % atx_track_size + 1;
+	uint8_t tgtTrackNumber = (num - 1) / atx_track_size[atx_drive_number] + 1;
+	uint8_t tgtSectorNumber = (num - 1) % atx_track_size[atx_drive_number] + 1;
 
 	// set initial status (in case the target sector is not found)
 	*status = 0x10;
@@ -1126,9 +1118,9 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 	sleep_us(us_drive_request_delay);
 
 	// delay for track stepping if needed
-	if (gCurrentHeadTrack != tgtTrackNumber) {
+	if (gCurrentHeadTrack[atx_drive_number] != tgtTrackNumber) {
 		int8_t diff;
-		diff = tgtTrackNumber - gCurrentHeadTrack;
+		diff = tgtTrackNumber - gCurrentHeadTrack[atx_drive_number];
 		if (diff < 0)
 			diff *= -1;
 		// wait for each track (this is done in a loop since _delay_ms needs a compile-time constant)
@@ -1140,13 +1132,13 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 	}
 
 	// set new head track position
-	gCurrentHeadTrack = tgtTrackNumber;
+	gCurrentHeadTrack[atx_drive_number] = tgtTrackNumber;
 
 	// sample current head position
 	uint16_t headPosition = getCurrentHeadPosition();
 
 	// read the track header
-	uint32_t currentFileOffset = gTrackInfo[tgtTrackNumber - 1].offset;
+	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1];
 	uint16_t sectorCount;
 	// exit, if track not present
 	if (!currentFileOffset || mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
@@ -1184,7 +1176,7 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 						int tt = sectorHeader->timev - headPosition;
 						if (pTT == 0 || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
 							pTT = tt;
-							gLastAngle = sectorHeader->timev;
+							gLastAngle[atx_drive_number] = sectorHeader->timev;
 							*status = sectorHeader->status;
 							if (*status & mask_fdc_dlost)
 								*status |= 0x02;
@@ -1210,7 +1202,7 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 			hasError = true;
 
 		if (extendedDataRecords > 0) {
-			currentFileOffset = gTrackInfo[tgtTrackNumber - 1].offset + trackHeader->headerSize;
+			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + trackHeader->headerSize;
 			do {
 				if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackChunk), false) != FR_OK)
 					goto atx_error;
@@ -1226,7 +1218,7 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 			*status &= ~mask_extended_data;
 		}
 
-		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number, gTrackInfo[tgtTrackNumber - 1].offset + tgtSectorOffset, atx_sector_size, false) == FR_OK && hasError)
+		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && hasError)
 			r = true;
 
 		// if a weak offset is defined, randomize the appropriate data
@@ -1234,7 +1226,7 @@ bool loadAtxSector(uint16_t num, uint8_t *status) {
 			for (i = (uint16_t) weakOffset; i < atx_sector_size; i++)
 				sector_buffer[i] = (uint8_t) get_rand_32();
 
-		uint16_t rotationDelay = (gLastAngle > headPosition) ? (gLastAngle - headPosition) : (au_full_rotation - headPosition + gLastAngle);
+		uint16_t rotationDelay = (gLastAngle[atx_drive_number] > headPosition) ? (gLastAngle[atx_drive_number] - headPosition) : (au_full_rotation - headPosition + gLastAngle[atx_drive_number]);
 		uint16_t au_one_sector_read = au_full_rotation / sectorCount;
 		waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
 		sleep_ms(ms_crc_calculation);
@@ -1314,8 +1306,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.temp3 = 0x80;
 							break;
 						case disk_type_atx:
-							if(loadAtxFile(&fil)) {
-								mounts[i].status = 40*atx_track_size*disk_headers[i-1].atr_header.sec_size-(disk_headers[i-1].atr_header.sec_size == 256 ? 384 : 0);
+							if(loadAtxFile(&fil, i-1)) {
+								mounts[i].status = 40*atx_track_size[i-1]*disk_headers[i-1].atr_header.sec_size-(disk_headers[i-1].atr_header.sec_size == 256 ? 384 : 0);
 								disk_headers[i-1].atr_header.pars = mounts[i].status >> 4;
 								disk_headers[i-1].atr_header.pars_high = 0x00;
 								disk_headers[i-1].atr_header.flags = 0x1;
@@ -1473,9 +1465,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							break;
 						case disk_type_atx:
 							uart_putc_raw(uart1, r);
-							// TODO when does the request time go in?
+							// TODO when does the request time go in? Is this correct as it is now?
 							to_read = disk_headers[drive_number-1].atr_header.sec_size;
-							if(!loadAtxSector(sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
+							if(!loadAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
 								f_op_stat = FR_INT_ERR;
 							break;
 						default:
@@ -1728,7 +1720,7 @@ void core1_entry() {
 	dma_channel_turbo = dma_claim_unused_channel(true);
 	dma_channel_config dma_c1 = dma_channel_get_default_config(dma_channel_turbo);
 	channel_config_set_transfer_data_size(&dma_c1, DMA_SIZE_32);
-	channel_config_set_read_increment(&dma_c1, false); // TODO default?
+	channel_config_set_read_increment(&dma_c1, false);
 	channel_config_set_dreq(&dma_c1, pio_get_dreq(cas_pio, sm_turbo, true));
 	dma_channel_configure(dma_channel_turbo, &dma_c1, &cas_pio->txf[sm_turbo], &pio_e, 1, false);
 	dma_channel_set_irq0_enabled(dma_channel_turbo, true);
@@ -2225,8 +2217,6 @@ restart_options:
 					high_speed = -1;
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 				}
-				// TODO process the new option set?
-				// For turbo this is done elsewhere
 				goto restart_options;
 			}
 		}
@@ -2313,7 +2303,7 @@ int main() {
 				}else{
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
-						mounts[d].status = 0; // TODO probably obsolete
+						mounts[d].status = 0;
 						if(!d)
 							last_cas_offset = -1;
 					}
