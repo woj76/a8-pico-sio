@@ -17,6 +17,7 @@
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
 #include "pico/time.h"
+#include "pico/rand.h"
 #include "hardware/uart.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
@@ -35,6 +36,7 @@
 
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
+#include "disk_counter.pio.h"
 #include "boot_loader.h"
 
 
@@ -715,6 +717,7 @@ uint turbo_data_pin;
 //const uint turbo_data_pin = interrupt_pin;
 
 const PIO cas_pio = pio0;
+const PIO disk_pio = pio1;
 const auto GPIO_FUNC_PIOX = GPIO_FUNC_PIO0;
 
 uint sm, sm_turbo;
@@ -744,9 +747,10 @@ void check_turbo_conf() {
 	turbo_conf[2] = current_options[turbo3_option_index];
 }
 
+
 volatile bool dma_block_turbo;
 volatile bool dma_going = false;
-int dma_channel, dma_channel_turbo;
+int disk_dma_channel, dma_channel, dma_channel_turbo;
 
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
@@ -784,6 +788,20 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 	cas_pio->txf[sm] = (b | (d << 1));
 }
 */
+
+volatile uint32_t disk_counter;
+
+void disk_dma_handler() {
+	dma_hw->ints1 = 1u << disk_dma_channel;
+	dma_channel_start(disk_dma_channel);
+}
+
+/*
+uint16_t get_disk_counter() {
+	return (uint16_t)(au_full_rotation-disk_counter);
+}
+*/
+
 
 const uint8_t boot_reloc_locs[] = {0x03, 0x0a, 0x0d, 0x12, 0x17, 0x1a, 0x21, 0x2c, 0x33, 0x3e, 0x44, 0x5c, 0x6b, 0x6e, 0x7f, 0x82, 0x87, 0x98, 0x9b, 0xa2, 0xa7, 0xae, 0xb2};
 const int boot_reloc_locs_size = 23;
@@ -938,6 +956,296 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	return f_op_stat;
 }
 
+// Modified implementation from sdrive-max project
+// Original author of the ATX code dated 21/01/2018 is Daniel Noguerol
+// Check the sdrive-max project for details
+
+enum atx_density { atx_single, atx_medium, atx_double};
+
+struct __attribute__((__packed__)) atxFileHeader {
+    uint8_t signature[4];
+    uint16_t version;
+    uint16_t minVersion;
+    uint16_t creator;
+    uint16_t creatorVersion;
+    uint32_t flags;
+    uint16_t imageType;
+    uint8_t density;
+    uint8_t reserved0;
+    uint32_t imageId;
+    uint16_t imageVersion;
+    uint16_t reserved1;
+    uint32_t startData;
+    uint32_t endData;
+    uint8_t reserved2[12];
+};
+
+struct __attribute__((__packed__)) atxTrackHeader {
+    uint32_t size;
+    uint16_t type;
+    uint16_t reserved0;
+    uint8_t trackNumber;
+    uint8_t reserved1;
+    uint16_t sectorCount;
+    uint16_t rate;
+    uint16_t reserved3;
+    uint32_t flags;
+    uint32_t headerSize;
+    uint8_t reserved4[8];
+};
+
+struct __attribute__((__packed__)) atxSectorListHeader {
+    uint32_t next;
+    uint16_t type;
+    uint16_t pad0;
+};
+
+struct __attribute__((__packed__)) atxSectorHeader {
+    uint8_t number;
+    uint8_t status;
+    uint16_t timev;
+    uint32_t data;
+};
+
+struct __attribute__((__packed__)) atxTrackChunk {
+    uint32_t size;
+    uint8_t type;
+    uint8_t sectorIndex;
+    uint16_t data;
+};
+
+struct __attribute__((__packed__)) atxTrackInfo {
+	uint32_t offset; // absolute position within file for start of track header
+};
+
+const uint16_t atx_version = 0x01;
+const size_t max_track = 42;
+const int atx_drive_number = 0;
+
+const int au_full_rotation = 26042; // number of angular units in a full disk rotation
+// #define MS_ANGULAR_UNIT_VAL      0.007999897601 // number of ms for each angular unit
+const uint us_drive_request_delay = 3220; // number of microseconds drive takes to process a request
+const uint ms_crc_calculation = 2; // number of milliseconds to calculate CRC
+const uint us_track_step_810 = 5300; // number of microseconds drive takes to step 1 track
+const uint us_track_step_1050 = 12410;
+const uint ms_head_settle_1050 = 40; // number of milliseconds drive head takes to settle after track stepping (0 for 810)
+const int max_retries_810 = 1;
+const int max_retries_1050 = 4;
+
+const uint8_t mask_fdc_dlost = 0x04; // mask for checking FDC status "data lost" bit
+const uint8_t mask_fdc_missing = 0x10; // mask for checking FDC status "missing" bit
+const uint8_t mask_extended_data = 0x40; // mask for checking FDC status extended data bit
+const uint8_t mask_reserved = 0x80;
+
+
+uint8_t atx_track_size; // number of sectors in each track
+uint16_t gLastAngle;
+uint8_t gCurrentHeadTrack;
+struct atxTrackInfo gTrackInfo[max_track]; // pre-calculated info for each track
+
+uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
+	uint16_t ret = start + delta;
+	if (ret > au_full_rotation)
+		ret -= au_full_rotation;
+	return ret;
+}
+
+uint16_t getCurrentHeadPosition() {
+	return (uint16_t)(au_full_rotation-disk_counter);
+}
+
+void waitForAngularPosition(uint16_t pos) {
+	// Alternative 1
+	while(getCurrentHeadPosition() != pos)
+		tight_loop_contents();
+	// Alternative 2
+/*
+	int to_wait = pos - getCurrentHeadPosition();
+	if(to_wait < 0)
+		to_wait += au_full_rotation;
+	sleep_us(8*to_wait);
+*/
+}
+
+// TODO allow ATX only in slot D1
+
+bool loadAtxFile() {
+	struct atxFileHeader *fileHeader;
+	struct atxTrackHeader *trackHeader;
+
+	if(mounted_file_transfer(atx_drive_number, 0, sizeof(struct atxFileHeader), false) != FR_OK)
+		return false;
+
+	fileHeader = (struct atxFileHeader *) sector_buffer;
+	// The AT8X header should have been checked by now
+	if (fileHeader->version != atx_version || fileHeader->minVersion != atx_version)
+		return false;
+
+	atx_track_size = (fileHeader->density == atx_medium) ? 26 : 18;
+	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
+
+	uint32_t startOffset = fileHeader->startData;
+	uint8_t track;
+	for (track = 0; track < max_track; track++) {
+		if(mounted_file_transfer(atx_drive_number, startOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
+			break;
+		trackHeader = (struct atxTrackHeader *) sector_buffer;
+
+		gTrackInfo[track].offset = startOffset;
+		startOffset += trackHeader->size;
+	}
+	return true;
+}
+
+bool loadAtxSector(uint16_t num, uint8_t *status) {
+	struct atxTrackHeader *trackHeader;
+	struct atxSectorListHeader *slHeader;
+	struct atxSectorHeader *sectorHeader;
+	struct atxTrackChunk *extSectorData;
+
+	uint16_t i;
+	uint16_t tgtSectorIndex = 0; // the index of the target sector within the sector list
+	uint32_t tgtSectorOffset = 0; // the offset of the target sector data
+	bool hasError = false; // flag for drive status errors
+	bool r = false;
+
+	uint8_t extendedDataRecords = 0;
+	int16_t weakOffset = -1;
+	uint16_t atx_sector_size = disk_headers[atx_drive_number].atr_header.sec_size;
+	bool is1050 = (disk_headers[atx_drive_number].atr_header.temp3 & 0x40) ? false : true;
+
+	// calculate track and relative sector number from the absolute sector number
+	uint8_t tgtTrackNumber = (num - 1) / atx_track_size + 1;
+	uint8_t tgtSectorNumber = (num - 1) % atx_track_size + 1;
+
+	// set initial status (in case the target sector is not found)
+	*status = 0x10;
+
+	// delay for the time the drive takes to process the request
+	sleep_us(us_drive_request_delay);
+
+	// delay for track stepping if needed
+	if (gCurrentHeadTrack != tgtTrackNumber) {
+		int8_t diff;
+		diff = tgtTrackNumber - gCurrentHeadTrack;
+		if (diff < 0)
+			diff *= -1;
+		// wait for each track (this is done in a loop since _delay_ms needs a compile-time constant)
+		for (i = 0; i < diff; i++)
+			sleep_us(is1050 ? us_track_step_1050 : us_track_step_810);
+		// delay for head settling
+		if(is1050)
+			sleep_ms(ms_head_settle_1050);
+	}
+
+	// set new head track position
+	gCurrentHeadTrack = tgtTrackNumber;
+
+	// sample current head position
+	uint16_t headPosition = getCurrentHeadPosition();
+
+	// read the track header
+	uint32_t currentFileOffset = gTrackInfo[tgtTrackNumber - 1].offset;
+	uint16_t sectorCount;
+	// exit, if track not present
+	if (!currentFileOffset || mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
+		goto atx_error;
+	trackHeader = (struct atxTrackHeader *)sector_buffer;
+	sectorCount = trackHeader->sectorCount;
+
+	// if there are no sectors in this track or the track number doesn't match, return error
+	if (trackHeader->trackNumber == tgtTrackNumber - 1 && sectorCount) {
+		// read the sector list header if there are sectors for this track
+		currentFileOffset += trackHeader->headerSize;
+		if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxSectorListHeader), false) != FR_OK)
+			goto atx_error;
+		slHeader = (struct atxSectorListHeader *) sector_buffer;
+
+		// sector list header is variable length, so skip any extra header bytes that may be present
+		currentFileOffset += slHeader->next - sectorCount * sizeof(struct atxSectorHeader);
+
+		int pTT = 0;
+		uint8_t retries = is1050 ? max_retries_1050 : max_retries_810;
+
+		// if we are still below the maximum number of retries that would be performed by the drive firmware...
+		uint32_t retryOffset = currentFileOffset;
+		while (retries > 0) {
+			retries--;
+			currentFileOffset = retryOffset;
+			// iterate through all sector headers to find the target sector
+			for (i=0; i < sectorCount; i++) {
+				if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
+					sectorHeader = (struct atxSectorHeader *)sector_buffer;
+
+					// if the sector is not flagged as missing and its number matches the one we're looking for...
+					if (!(sectorHeader->status & mask_fdc_missing) && sectorHeader->number == tgtSectorNumber) {
+						// check if it's the next sector that the head would encounter angularly...
+						int tt = sectorHeader->timev - headPosition;
+						if (pTT == 0 || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
+							pTT = tt;
+							gLastAngle = sectorHeader->timev;
+							*status = sectorHeader->status;
+							if (*status & mask_fdc_dlost)
+								*status |= 0x02;
+							if (*status & mask_extended_data)
+								extendedDataRecords++;
+							tgtSectorIndex = i;
+							tgtSectorOffset = sectorHeader->data;
+						}
+					}
+					currentFileOffset += sizeof(struct atxSectorHeader);
+				}
+			}
+			// if the sector status is bad, delay for a full disk rotation
+			if (*status)
+				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation));
+			else
+				retries = 0;
+		}
+
+		// ignore the reserved bit
+		*status &= ~mask_reserved;
+		if (*status)
+			hasError = true;
+
+		if (extendedDataRecords > 0) {
+			currentFileOffset = gTrackInfo[tgtTrackNumber - 1].offset + trackHeader->headerSize;
+			do {
+				if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackChunk), false) != FR_OK)
+					goto atx_error;
+				extSectorData = (struct atxTrackChunk *) sector_buffer;
+				if (extSectorData->size > 0) {
+					// if the target sector has a weak data flag, grab the start weak offset within the sector data
+					if (extSectorData->sectorIndex == tgtSectorIndex && extSectorData->type == 0x10)
+						weakOffset = extSectorData->data;
+					currentFileOffset += extSectorData->size;
+				}
+			} while (extSectorData->size > 0);
+			//clear extended flag, it is similar to write protect in DVSTAT[1]
+			*status &= ~mask_extended_data;
+		}
+
+		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number, gTrackInfo[tgtTrackNumber - 1].offset + tgtSectorOffset, atx_sector_size, false) == FR_OK && hasError)
+			r = true;
+
+		// if a weak offset is defined, randomize the appropriate data
+		if (weakOffset > -1)
+			for (i = (uint16_t) weakOffset; i < atx_sector_size; i++)
+				sector_buffer[i] = (uint8_t) get_rand_32();
+
+		uint16_t rotationDelay = (gLastAngle > headPosition) ? (gLastAngle - headPosition) : (au_full_rotation - headPosition + gLastAngle);
+		uint16_t au_one_sector_read = au_full_rotation / sectorCount;
+		waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
+		sleep_ms(ms_crc_calculation);
+	}
+
+atx_error:
+	// the Atari expects an inverted FDC status byte
+	*status = ~(*status);
+
+	return r;
+}
+
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
@@ -1005,13 +1313,15 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.temp3 = 0x80;
 							break;
 						case disk_type_atx:
-							mounts[i].status = 0xFFFF; // TODO
-							disk_headers[i-1].atr_header.sec_size = 0xFFFF; // TODO
-							disk_headers[i-1].atr_header.pars = 0xFFFF; // TODO
-							disk_headers[i-1].atr_header.pars_high = 0xFF; // TODO
-							disk_headers[i-1].atr_header.flags = 0x1;
-							disk_headers[i-1].atr_header.temp2 = 0xFF;
-							disk_headers[i-1].atr_header.temp3 = locate_percom(i) | (current_options[atx_option_index] ? 0x40 : 0x00);
+							if(loadAtxFile()) {
+								mounts[i].status = 40*atx_track_size*disk_headers[i-1].atr_header.sec_size-(disk_headers[i-1].atr_header.sec_size == 256 ? 384 : 0);
+								disk_headers[i-1].atr_header.pars = mounts[i].status >> 4;
+								disk_headers[i-1].atr_header.pars_high = 0x00;
+								disk_headers[i-1].atr_header.flags = 0x1;
+								disk_headers[i-1].atr_header.temp2 = 0xFF;
+								disk_headers[i-1].atr_header.temp3 = locate_percom(i) | (current_options[atx_option_index] ? 0x40 : 0x00);
+							}else
+								disk_type = 0;
 							break;
 						default:
 							break;
@@ -1161,7 +1471,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							}
 							break;
 						case disk_type_atx:
-							// TODO
+							uart_putc_raw(uart1, r);
+							// TODO when does the request time go in?
+							to_read = disk_headers[drive_number-1].atr_header.sec_size;
+							if(!loadAtxSector(sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
+								f_op_stat = FR_INT_ERR;
 							break;
 						default:
 							break;
@@ -1355,6 +1669,30 @@ void core1_entry() {
 
 	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
 
+	uint disk_pio_offset = pio_add_program(disk_pio, &disk_counter_program);
+	float disk_clk_divider = (float)clock_get_hz(clk_sys)/1000000;
+	uint disk_sm = pio_claim_unused_sm(disk_pio, true);
+	pio_sm_config disk_sm_config = pin_io_program_get_default_config(disk_pio_offset);
+	sm_config_set_clkdiv(&disk_sm_config, disk_clk_divider);
+	sm_config_set_in_shift(&disk_sm_config, true, false, 32);
+	sm_config_set_out_shift(&disk_sm_config, true, true, 32);
+	pio_sm_init(disk_pio, disk_sm, disk_pio_offset, &disk_sm_config);
+
+	disk_dma_channel = dma_claim_unused_channel(true);
+	dma_channel_config disk_dma_c = dma_channel_get_default_config(disk_dma_channel);
+	channel_config_set_transfer_data_size(&disk_dma_c, DMA_SIZE_32);
+	channel_config_set_read_increment(&disk_dma_c, false);
+	channel_config_set_write_increment(&disk_dma_c, false);
+	channel_config_set_dreq(&disk_dma_c, pio_get_dreq(disk_pio, disk_sm, false));
+	pio_sm_set_enabled(disk_pio, disk_sm, true);
+	dma_channel_set_irq1_enabled(disk_dma_channel, true);
+
+	irq_set_exclusive_handler(DMA_IRQ_1, disk_dma_handler);
+	irq_set_enabled(DMA_IRQ_1, true);
+
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x80000000, true);
+	disk_pio->txf[disk_sm] = (au_full_rotation-1);
+
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
  	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
 
@@ -1389,7 +1727,7 @@ void core1_entry() {
 	dma_channel_turbo = dma_claim_unused_channel(true);
 	dma_channel_config dma_c1 = dma_channel_get_default_config(dma_channel_turbo);
 	channel_config_set_transfer_data_size(&dma_c1, DMA_SIZE_32);
-	channel_config_set_read_increment(&dma_c1, false);
+	channel_config_set_read_increment(&dma_c1, false); // TODO default?
 	channel_config_set_dreq(&dma_c1, pio_get_dreq(cas_pio, sm_turbo, true));
 	dma_channel_configure(dma_channel_turbo, &dma_c1, &cas_pio->txf[sm_turbo], &pio_e, 1, false);
 	dma_channel_set_irq0_enabled(dma_channel_turbo, true);

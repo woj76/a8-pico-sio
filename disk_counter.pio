@@ -1,0 +1,13 @@
+.program disk_counter
+	out y,32 ; provide 26041 here as a uint32_t
+.wrap_target
+	mov x, y
+	jmp do_count
+
+loop:
+	nop [2]
+do_count:
+	mov isr, x
+	push [3]
+	jmp x--, loop
+.wrap
