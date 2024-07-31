@@ -1069,11 +1069,12 @@ void waitForAngularPosition(uint16_t pos) {
 
 // TODO allow ATX only in slot D1
 
-bool loadAtxFile() {
+bool loadAtxFile(FIL *fil) {
 	struct atxFileHeader *fileHeader;
 	struct atxTrackHeader *trackHeader;
+	uint bytes_read;
 
-	if(mounted_file_transfer(atx_drive_number, 0, sizeof(struct atxFileHeader), false) != FR_OK)
+	if(f_read(fil, sector_buffer, sizeof(struct atxFileHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxFileHeader))
 		return false;
 
 	fileHeader = (struct atxFileHeader *) sector_buffer;
@@ -1087,10 +1088,10 @@ bool loadAtxFile() {
 	uint32_t startOffset = fileHeader->startData;
 	uint8_t track;
 	for (track = 0; track < max_track; track++) {
-		if(mounted_file_transfer(atx_drive_number, startOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
+		f_lseek(fil, startOffset);
+		if(f_read(fil, sector_buffer, sizeof(struct atxTrackHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxTrackHeader))
 			break;
 		trackHeader = (struct atxTrackHeader *) sector_buffer;
-
 		gTrackInfo[track].offset = startOffset;
 		startOffset += trackHeader->size;
 	}
@@ -1313,7 +1314,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							disk_headers[i-1].atr_header.temp3 = 0x80;
 							break;
 						case disk_type_atx:
-							if(loadAtxFile()) {
+							if(loadAtxFile(&fil)) {
 								mounts[i].status = 40*atx_track_size*disk_headers[i-1].atr_header.sec_size-(disk_headers[i-1].atr_header.sec_size == 256 ? 384 : 0);
 								disk_headers[i-1].atr_header.pars = mounts[i].status >> 4;
 								disk_headers[i-1].atr_header.pars_high = 0x00;
