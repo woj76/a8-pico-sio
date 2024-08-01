@@ -764,7 +764,7 @@ uint32_t pio_e;
 void dma_handler() {
 	int dc = dma_block_turbo ? dma_channel_turbo : dma_channel;
 	if(dma_going)
-		dma_hw->ints0 = 1u << dc;
+		dma_hw->ints1 = 1u << dc;
 	else
 		dma_going = true;
 	if(queue_try_remove(&pio_queue, &pio_e))
@@ -794,8 +794,10 @@ void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
 volatile uint32_t disk_counter;
 
 void disk_dma_handler() {
-	dma_hw->ints1 = 1u << disk_dma_channel;
-	dma_channel_start(disk_dma_channel);
+	if(dma_hw->ints0 & (1u << disk_dma_channel)) {
+		dma_hw->ints0 = 1u << disk_dma_channel;
+		dma_channel_start(disk_dma_channel);
+	}
 }
 
 /*
@@ -1717,10 +1719,10 @@ void core1_entry() {
 	channel_config_set_write_increment(&disk_dma_c, false);
 	channel_config_set_dreq(&disk_dma_c, pio_get_dreq(disk_pio, disk_sm, false));
 	pio_sm_set_enabled(disk_pio, disk_sm, true);
-	dma_channel_set_irq1_enabled(disk_dma_channel, true);
+	dma_channel_set_irq0_enabled(disk_dma_channel, true);
 
-	irq_set_exclusive_handler(DMA_IRQ_1, disk_dma_handler);
-	irq_set_enabled(DMA_IRQ_1, true);
+	irq_add_shared_handler(DMA_IRQ_0, disk_dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+	irq_set_enabled(DMA_IRQ_0, true);
 
 	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x80000000, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
@@ -1762,10 +1764,10 @@ void core1_entry() {
 	channel_config_set_read_increment(&dma_c1, false);
 	channel_config_set_dreq(&dma_c1, pio_get_dreq(cas_pio, sm_turbo, true));
 	dma_channel_configure(dma_channel_turbo, &dma_c1, &cas_pio->txf[sm_turbo], &pio_e, 1, false);
-	dma_channel_set_irq0_enabled(dma_channel_turbo, true);
+	dma_channel_set_irq1_enabled(dma_channel_turbo, true);
 
-	irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
-	irq_set_enabled(DMA_IRQ_0, true);
+	irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
+	irq_set_enabled(DMA_IRQ_1, true);
 
 #ifdef PICO_UART
 	uart_init(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
