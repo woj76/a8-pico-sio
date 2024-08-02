@@ -812,7 +812,7 @@ const uint8_t boot_reloc_locs[] = {0x03, 0x0a, 0x0d, 0x12, 0x17, 0x1a, 0x21, 0x2
 const int boot_reloc_locs_size = 23;
 const int8_t boot_reloc_delta[] = {0, -2, -1, 1, 2, 3};
 
-const uint8_t hsio_opt_to_index[] = {0x28, 6, 5, 4, 3, 2, 1, 0};
+const uint8_t hsio_opt_to_index[] = {0x28, 0x10, 6, 5, 4, 3, 2, 1, 0};
 const uint hsio_opt_to_baud_ntsc[] = {19040, 38908, 68838, 74575, 81354, 89490, 99433, 111862, 127842};
 const uint hsio_opt_to_baud_pal[] = {18866, 38553, 68210, 73894, 80611, 88672, 98525, 110840, 126675};
 // PAL/NTSC average
@@ -1189,6 +1189,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
 							// TODO shouldn't this have a break
+							break;
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
@@ -1255,7 +1256,7 @@ volatile bool save_path_flag = false;
 const uint32_t flash_save_offset = 0x100000-4096;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
 const size_t flash_dir_state_offset = 256;
-const size_t flash_config_offset = flash_dir_state_offset+128+2;
+const size_t flash_config_offset = flash_dir_state_offset+128+4;
 const size_t flash_check_sig_offset = flash_config_offset+64;
 const uint32_t config_magic = 0xDEADBEEF;
 
@@ -1735,7 +1736,7 @@ void core1_entry() {
 	irq_add_shared_handler(DMA_IRQ_0, disk_dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
 	irq_set_enabled(DMA_IRQ_0, true);
 
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1 /*0x80000000*/, true);
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x80000000, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
