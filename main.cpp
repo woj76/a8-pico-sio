@@ -10,6 +10,7 @@
 
 // https://forums.atariage.com/topic/271215-why-the-k-on-boot/?do=findComment&comment=4209492
 // http://www.whizzosoftware.com/sio2arduino/vapi.html
+// https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
 
 #include <string.h>
 #include <cstdlib>
@@ -269,7 +270,7 @@ const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
 const char *clock_option_names_short[] = {"  PAL", " NTSC"};
 const char *clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
 const char *hsio_option_names_short[] = {"  $28", "  $10", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
-const char *hsio_option_names_long[] = {"$28 OFF - Standard", "$10 ~39 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
+const char *hsio_option_names_long[] = {"$28 OFF/Standard", "$10 ~39 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
 const char *atx_option_names_short[] = {" 1050", "  810"};
 const char *atx_option_names_long[] = {"Atari 1050", "Atari 810"};
 const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800", " $900", " $A00"};
@@ -1058,7 +1059,7 @@ void waitForAngularPosition(uint16_t pos) {
 		tight_loop_contents();
 	// Alternative 2
 /*
-	int to_wait = pos - getCurrentHeadPosition();
+	int32_t to_wait = pos - getCurrentHeadPosition();
 	if(to_wait < 0)
 		to_wait += au_full_rotation;
 	sleep_us(8*to_wait);
@@ -1082,8 +1083,7 @@ bool loadAtxFile(FIL *fil, int atx_drive_number) {
 	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
 
 	uint32_t startOffset = fileHeader->startData;
-	uint8_t track;
-	for (track = 0; track < max_track; track++) {
+	for (uint8_t track = 0; track < max_track; track++) {
 		f_lseek(fil, startOffset);
 		if(f_read(fil, sector_buffer, sizeof(struct atxTrackHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxTrackHeader))
 			break;
@@ -1126,7 +1126,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		int8_t diff;
 		diff = tgtTrackNumber - gCurrentHeadTrack[atx_drive_number];
 		if (diff < 0)
-			diff *= -1;
+			diff = -diff;
 		// wait for each track (this is done in a loop since _delay_ms needs a compile-time constant)
 		for (i = 0; i < diff; i++)
 			sleep_us(is1050 ? us_track_step_1050 : us_track_step_810);
@@ -1145,7 +1145,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1];
 	uint16_t sectorCount;
 	// exit, if track not present
-	if (!currentFileOffset || mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
+	if (!currentFileOffset || mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
 		goto atx_error;
 	trackHeader = (struct atxTrackHeader *)sector_buffer;
 	sectorCount = trackHeader->sectorCount;
@@ -1154,7 +1154,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	if (trackHeader->trackNumber == tgtTrackNumber - 1 && sectorCount) {
 		// read the sector list header if there are sectors for this track
 		currentFileOffset += trackHeader->headerSize;
-		if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxSectorListHeader), false) != FR_OK)
+		if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorListHeader), false) != FR_OK)
 			goto atx_error;
 		slHeader = (struct atxSectorListHeader *) sector_buffer;
 
@@ -1171,7 +1171,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			currentFileOffset = retryOffset;
 			// iterate through all sector headers to find the target sector
 			for (i=0; i < sectorCount; i++) {
-				if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
+				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
 					sectorHeader = (struct atxSectorHeader *)sector_buffer;
 
 					// if the sector is not flagged as missing and its number matches the one we're looking for...
@@ -1188,6 +1188,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 								extendedDataRecords++;
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
+							// TODO shouldn't this have a break
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
@@ -1208,7 +1209,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		if (extendedDataRecords > 0) {
 			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + trackHeader->headerSize;
 			do {
-				if (mounted_file_transfer(atx_drive_number, currentFileOffset, sizeof(struct atxTrackChunk), false) != FR_OK)
+				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false) != FR_OK)
 					goto atx_error;
 				extSectorData = (struct atxTrackChunk *) sector_buffer;
 				if (extSectorData->size > 0) {
@@ -1222,7 +1223,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			*status &= ~mask_extended_data;
 		}
 
-		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && hasError)
+		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && !hasError)
 			r = true;
 
 		// if a weak offset is defined, randomize the appropriate data
@@ -1243,18 +1244,26 @@ atx_error:
 	return r;
 }
 
+//uint16_t dir_browse_stack[128];
+//uint16_t dir_browse_stack_index=0;
+volatile uint16_t dir_browse_stack[64];
+volatile uint16_t dir_browse_stack_index=0;
+
 volatile bool save_config_flag = false;
 volatile bool save_path_flag = false;
 
 const uint32_t flash_save_offset = 0x100000-4096;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
-const size_t flash_config_offset = 256;
-const size_t flash_check_sig_offset = flash_config_offset+128;
+const size_t flash_dir_state_offset = 256;
+const size_t flash_config_offset = flash_dir_state_offset+128+2;
+const size_t flash_check_sig_offset = flash_config_offset+64;
 const uint32_t config_magic = 0xDEADBEEF;
 
 void inline check_and_load_config(bool reset_config) {
 	if(!reset_config && *(uint32_t *)&flash_config_pointer[flash_check_sig_offset] == config_magic) {
-		memcpy(curr_path, flash_config_pointer, 256);
+		memcpy(curr_path, &flash_config_pointer[0], 256);
+		memcpy((void *)dir_browse_stack, &flash_config_pointer[flash_dir_state_offset], 128);
+		memcpy((void *)&dir_browse_stack_index, &flash_config_pointer[flash_dir_state_offset+128], 2);
 		memcpy(current_options, &flash_config_pointer[flash_config_offset], option_count-1);
 	} else {
 		save_path_flag = true;
@@ -1266,7 +1275,9 @@ void inline check_and_save_config() {
 	if(!save_path_flag && !save_config_flag)
 		return;
 	memset(sector_buffer, 0, sector_buffer_size);
-	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : flash_config_pointer, 256);
+	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], 256);
+	memcpy(&sector_buffer[flash_dir_state_offset], save_path_flag ? (void *)dir_browse_stack : &flash_config_pointer[flash_dir_state_offset], 128);
+	memcpy(&sector_buffer[flash_dir_state_offset+128], save_path_flag ? (void *)&dir_browse_stack_index : &flash_config_pointer[flash_dir_state_offset+128], 2);
 	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
 	multicore_lockout_start_blocking();
@@ -1570,7 +1581,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sector_buffer[0] = sector_buffer[1] = 0xFF;
 					break;
 				case '?': // get speed index
-					if(!current_options[hsio_option_index])
+					if(!current_options[hsio_option_index] || disk_headers[drive_number-1].atr_header.temp4 == disk_type_atx)
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
@@ -1724,7 +1735,7 @@ void core1_entry() {
 	irq_add_shared_handler(DMA_IRQ_0, disk_dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
 	irq_set_enabled(DMA_IRQ_0, true);
 
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x80000000, true);
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1 /*0x80000000*/, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
@@ -1968,9 +1979,6 @@ void update_display_files(int top_index, int shift_index) {
 	}
 }
 
-int dir_browse_stack[128];
-int dir_browse_stack_index=0;
-
 void get_file(file_type t, int file_entry_index) {
 	if(t != ft) {
 		dir_browse_stack[dir_browse_stack_index] = 0;
@@ -1993,6 +2001,11 @@ void get_file(file_type t, int file_entry_index) {
 		uint8_t r = read_directory();
 		if(!r && curr_path[0]) {
 			curr_path[0] = 0;
+			dir_browse_stack_index = 0;
+			dir_browse_stack[0] = 0;
+			dir_browse_stack[1] = 0;
+			cursor_position = 0;
+			top_index = 0;
 			r = read_directory();
 		}
 		// sleep_ms(5000); // For testing
@@ -2119,7 +2132,7 @@ get_file_exit:
 
 void update_selection_entry(const char **opt_names, int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+i)*10*font_scale; // TODO start lower?
+	text_location.y = (2+(2+i)*10)*font_scale;
 	if(erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
@@ -2187,10 +2200,9 @@ void select_option(int opt_num) {
 
 void update_options_entry(int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+i)*10*font_scale; // TODO start lower?
-	// TODO bring back?
-	//if(i == option_count-1)
-	//	text_location.y += 4*font_scale;
+	text_location.y = (2+(2+i)*10)*font_scale;
+	if(i == option_count-1)
+		text_location.y += 2*font_scale;
 	if(erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
@@ -2361,6 +2373,16 @@ int main() {
 			last_cas_offset = s;
 		}
 		update_main_menu_buttons();
+/*
+		char txt_buf[20];
+		sprintf(txt_buf, " %d ", disk_counter);
+		text_location.x = 0;
+		text_location.y = 0;
+		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*8);
+		graphics.set_pen(BG);
+		graphics.rectangle(rt);
+		print_text(txt_buf);
+*/
 		st7789.update(&graphics);
 		sleep_ms(20);
 	}
