@@ -2359,8 +2359,6 @@ int main() {
 			update_main_menu();
 		}else if(button_a.read()){
 			if(d == -1) {
-				// React to:
-				// about option
 				if(cursor_position == 0) {
 					change_options();
 				}else if(cursor_position == 5 || cursor_position == 6) {
@@ -2383,6 +2381,8 @@ int main() {
 					mounts[li].status = 0;
 					mutex_exit(&mount_lock);
 					cursor_prev = -1;
+				}else if(cursor_position == 8) {
+					// TODO React to About... option
 				}
 				update_main_menu();
 			}else{
