@@ -388,12 +388,15 @@ size_t mark_directory(size_t is_directory_mask, size_t current_file_name_index) 
 }
 
 
+auto_init_mutex(fs_lock);
+
 uint8_t read_directory() {
 	FATFS fatfs; FILINFO fno; DIR dir;
 	size_t current_file_name_index = 0;
 	uint8_t ret = 1;
 
 	num_files = 0;
+	mutex_enter_blocking(&fs_lock);
 	if (f_mount(&fatfs, "", 1) == FR_OK) {
 		if (f_opendir(&dir, curr_path) == FR_OK) {
 			while (true) {
@@ -443,6 +446,7 @@ uint8_t read_directory() {
 	} else {
 		ret = 0;
 	}
+	mutex_exit(&fs_lock);
 	return ret;
 }
 
@@ -498,8 +502,6 @@ volatile mounts_type mounts[] = {
 	{.str=&str_d3, .mount_path=d3_mount, .mounted=false, .status = 0},
 	{.str=&str_d4, .mount_path=d4_mount, .mounted=false, .status = 0}
 };
-
-// TODO Blocking lock for FS access?
 
 const size_t sector_buffer_size = 512;
 uint8_t sector_buffer[sector_buffer_size];
@@ -843,6 +845,8 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 const uint32_t serial_read_timeout = 5000;
 const uint16_t desync_retries = 1;
 
+auto_init_mutex(mount_lock);
+
 bool try_get_sio_command() {
 	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and casette transfer
@@ -851,6 +855,7 @@ bool try_get_sio_command() {
 	static int last_drive = -1;
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
 		return false;
+	mutex_enter_blocking(&mount_lock);
 	bool r = true;
 	int i=0;
 	memset(&sio_command, 0x01, 5);
@@ -888,14 +893,18 @@ bool try_get_sio_command() {
 			disk_headers[last_drive].atr_header.temp1 = 0x0;
 		}
 	}
+	if(!r) mutex_exit(&mount_lock);
 	return r;
 }
 
 uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool op_write=false) {
+/*
+	// TODO not needed?
 	if(!mounts[drive_number].mounted) {
 		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 		return 'N';
 	}
+*/
 	if(op_write && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
 		disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
 		return 'N';
@@ -935,6 +944,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	FRESULT f_op_stat;
 	uint bytes_transferred;
 	uint8_t *data = &sector_buffer[t_offset];
+	mutex_enter_blocking(&fs_lock);
 	do {
 		if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 			break;
@@ -953,11 +963,13 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 		}
 		if(f_op_stat != FR_OK)
 			break;
+		// The mounted check only makes sense for CAS
 		if(bytes_transferred != to_transfer || !mounts[drive_number].mounted)
 			f_op_stat = FR_INT_ERR;
 	}while(false);
 	f_close(&fil);
 	f_mount(0, "", 1);
+	mutex_exit(&fs_lock);
 	return f_op_stat;
 }
 
@@ -1303,13 +1315,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 
 	while(true) {
 		for(i=0; i<5; i++) {
-			if(!mounts[i].mounted || mounts[i].status)
+			if(i) mutex_enter_blocking(&mount_lock);
+			if(!mounts[i].mounted || mounts[i].status) {
+				if(i) mutex_exit(&mount_lock);
 				continue;
-			if(f_mount(&fatfs, "", 1) != FR_OK)
-				break;
-			if(f_stat((const char *)mounts[i].mount_path, &fil_info) != FR_OK)
-				break;
-			if(f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+			}
+			mutex_enter_blocking(&fs_lock);
+			if(f_mount(&fatfs, "", 1) == FR_OK && f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
 					check_turbo_conf();
 					cas_sample_duration = timing_base_clock/600;
@@ -1380,6 +1392,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				f_close(&fil);
 			}
 			f_mount(0, "", 1);
+			mutex_exit(&fs_lock);
+			if(i) mutex_exit(&mount_lock);
 		}
 
 		if(try_get_sio_command()) {
@@ -1566,7 +1580,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				case '!': // Format SD / PERCOM
 				case '"': // Format ED
 					i = sio_command.command_id - 0x21;
-					if(!mounts[drive_number].mounted ||
+					if( /* !mounts[drive_number].mounted || */
 						(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
 						(i != (disk_headers[drive_number-1].atr_header.temp3 & 0x3)
 							&& !(disk_headers[drive_number-1].atr_header.temp3 & 0x4)))
@@ -1612,6 +1626,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
 				}
 			}
+			mutex_exit(&mount_lock);
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
 				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
@@ -1684,11 +1699,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			}
 			if(cas_block_index == cas_header.chunk_length) {
 				if(offset < cas_size && mounts[0].mounted) {
+					mutex_enter_blocking(&fs_lock);
 					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
 						offset = cas_read_forward(&fil, offset);
 					}
 					f_close(&fil);
 					f_mount(0, "", 1);
+					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
 					if(!offset)
 						mounts[0].mounted = false;
@@ -2102,6 +2119,7 @@ void get_file(file_type t, int file_entry_index) {
 						strcpy(&curr_path[i], f);
 						break;
 					} else {
+						if(file_entry_index) mutex_enter_blocking(&mount_lock);
 						mounts[file_entry_index].mounted = true;
 						mounts[file_entry_index].status = 0;
 						strcpy((char *)mounts[file_entry_index].mount_path, &curr_path[0]);
@@ -2112,6 +2130,7 @@ void get_file(file_type t, int file_entry_index) {
 							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
 							i++;
 						}
+						if(file_entry_index) mutex_exit(&mount_lock);
 						goto get_file_exit;
 					}
 				}
@@ -2341,9 +2360,29 @@ int main() {
 		}else if(button_a.read()){
 			if(d == -1) {
 				// React to:
-				// config, rotate up, rotate down
+				// about option
 				if(cursor_position == 0) {
 					change_options();
+				}else if(cursor_position == 5 || cursor_position == 6) {
+					int si = (cursor_position - 5) ? 4 : 1;
+					int li = (cursor_position - 5) ? 1 : 4;
+					int di = (cursor_position - 5) ? -1 : 1;
+					mutex_enter_blocking(&mount_lock);
+					memcpy(file_names, &(*mounts[si].str)[3], 13);
+					memcpy(&file_names[16], (const void *)mounts[si].mount_path, 256);
+					bool t = mounts[si].mounted;
+					for(int i=si; i != li; i += di) {
+						memcpy(&(*mounts[i].str)[3], &(*mounts[i+di].str)[3], 13);
+						memcpy((void *)mounts[i].mount_path, (void *)mounts[i+di].mount_path, 256);
+						mounts[i].mounted = mounts[i+di].mounted;
+						mounts[i].status = 0;
+					}
+					memcpy(&(*mounts[li].str)[3], file_names, 13);
+					memcpy((void *)mounts[li].mount_path, &file_names[16], 256);
+					mounts[li].mounted = t;
+					mounts[li].status = 0;
+					mutex_exit(&mount_lock);
+					cursor_prev = -1;
 				}
 				update_main_menu();
 			}else{
@@ -2351,9 +2390,9 @@ int main() {
 				save_path_flag = true;
 				update_main_menu();
 			}
-
 		}else if(button_b.read()) {
 			if(d != -1) {
+				if(d) mutex_enter_blocking(&mount_lock);
 				if(mounts[d].mounted) {
 					mounts[d].status = 0;
 					mounts[d].mounted = false;
@@ -2365,6 +2404,7 @@ int main() {
 							last_cas_offset = -1;
 					}
 				}
+				if(d) mutex_exit(&mount_lock);
 			}
 		}
 		FSIZE_t s = mounts[0].status;
