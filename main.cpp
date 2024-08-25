@@ -1265,7 +1265,7 @@ volatile uint16_t dir_browse_stack_index=0;
 volatile bool save_config_flag = false;
 volatile bool save_path_flag = false;
 
-const uint32_t flash_save_offset = 0x100000-4096;
+const uint32_t flash_save_offset = HW_FLASH_STORAGE_BASE-FLASH_SECTOR_SIZE;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
 const size_t flash_dir_state_offset = 256;
 const size_t flash_config_offset = flash_dir_state_offset+128+4;
@@ -1295,7 +1295,7 @@ void inline check_and_save_config() {
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
 	multicore_lockout_start_blocking();
 	uint32_t ints = save_and_disable_interrupts();
-	flash_range_erase(flash_save_offset, 4096);
+	flash_range_erase(flash_save_offset, FLASH_SECTOR_SIZE);
 	flash_range_program(flash_save_offset, (uint8_t *)sector_buffer, sector_buffer_size);
 	restore_interrupts(ints);
 	multicore_lockout_end_blocking();
@@ -1312,7 +1312,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 	FRESULT f_op_stat;
 	int i;
 	uint bytes_read;
-
 	while(true) {
 		for(i=0; i<5; i++) {
 			if(i) mutex_enter_blocking(&mount_lock);
@@ -1753,11 +1752,13 @@ void core1_entry() {
 	irq_add_shared_handler(DMA_IRQ_0, disk_dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
 	irq_set_enabled(DMA_IRQ_0, true);
 
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x80000000, true);
+	// Pico 2 does not like the "full" 0x80000000 for transfer counter, the core freezes!
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
  	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
+
 
 	sm = pio_claim_unused_sm(cas_pio, true);
 	pio_gpio_init(cas_pio, sio_tx_pin);

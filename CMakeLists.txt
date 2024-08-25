@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.13)
 
+# set(PICO_BOARD_HEADER_DIRS ${CMAKE_SOURCE_DIR})
+set(PICO_BOARD pico2)
+
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 include($ENV{PIMORONI_PICO_PATH}/pimoroni_pico_import.cmake)
 
@@ -7,9 +10,6 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
 project(a8_pico_sio C CXX ASM)
-
-set(PICO_BOARD_HEADER_DIRS ${CMAKE_SOURCE_DIR})
-set(PICO_BOARD myboard)
 
 pico_sdk_init()
 

@@ -7,7 +7,7 @@ extern "C" {
 #include <stdbool.h>
 
 #define HW_FLASH_STORAGE_BASE  (1024 * 1024)
-#define BOARD_SIZE 2 // in MB
+#define BOARD_SIZE 4 // in MB
 #define NUM_FLASH_SECTORS ((BOARD_SIZE - 1) * 256)
 #define NUM_FAT_SECTORS (NUM_FLASH_SECTORS * 8 - 4)
 #define MAP_ENTRIES (BOARD_SIZE-1)
