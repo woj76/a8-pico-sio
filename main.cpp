@@ -53,7 +53,7 @@ const std::string str_press_a_2 = "A";
 const std::string str_press_a_3 = " for";
 const std::string str_press_a_4 = "USB drive...";
 const std::string str_up_dir = "../";
-const std::string str_no_files = ">>No files!<<";
+const std::string str_no_files = "[No files!]";
 const std::string str_no_media = "No media!?";
 const std::string str_config2 = "Config";
 
