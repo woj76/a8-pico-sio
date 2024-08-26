@@ -390,7 +390,7 @@ void mark_directory(int i) {
 
 auto_init_mutex(fs_lock);
 
-uint16_t next_page_references[5464];
+uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with a tiny slack
 
 // param top_index signed int, -1 count only
 // result -1 error, otherwise files read / counted
