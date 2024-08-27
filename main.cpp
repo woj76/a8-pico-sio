@@ -14,6 +14,7 @@
 
 #include <string.h>
 #include <cstdlib>
+#include <ctype.h>
 
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
@@ -53,6 +54,7 @@ const std::string str_press_a_2 = "A";
 const std::string str_press_a_3 = " for";
 const std::string str_press_a_4 = "USB drive...";
 const std::string str_up_dir = "../";
+const std::string str_new_image = "New image...>";
 const std::string str_no_files = "[No files!]";
 const std::string str_no_media = "No media!?";
 const std::string str_config2 = "Config";
@@ -334,10 +336,11 @@ const option_list option_lists[] = {
 };
 
 uint8_t current_options[option_count-1] = {0};
-char curr_path[256] = {0};
+char curr_path[256+16] = {0};
 size_t num_files, num_files_page;
 
-char temp_array[1024];
+char temp_array[256+16];
+volatile bool create_new_file = false;
 
 typedef struct  __attribute__((__packed__)) {
 	bool dir;
@@ -391,8 +394,9 @@ void mark_directory(int i) {
 auto_init_mutex(fs_lock);
 
 uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with a tiny slack
+// uint16_t new_file_index;
 
-// param top_index signed int, -1 count only
+// param page_index signed int, -1 count only
 // result -1 error, otherwise files read / counted
 int32_t read_directory(int32_t page_index, int page_size) {
 	FATFS fatfs; FILINFO fno; DIR dir;
@@ -408,6 +412,8 @@ int32_t read_directory(int32_t page_index, int page_size) {
 			ret = 0;
 			uint16_t dir_index = -1;
 			int32_t look_for_index = page_index >= 0 ? next_page_references[page_index] : -1;
+			//if(page_index < 0)
+			//	new_file_index = 0;
 			while (true) {
 				dir_index++;
 				if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
@@ -418,8 +424,20 @@ int32_t read_directory(int32_t page_index, int page_size) {
 					file_entries[page_size].dir = is_dir;
 					file_entries[page_size].dir_index = dir_index;
 					strcpy(file_entries[page_size].long_name, fno.fname);
-					file_entries[page_size].short_name[0] = 0;
-					if(is_dir) mark_directory(page_size);
+					strcpy(file_entries[page_size].short_name, fno.altname[0] ? fno.altname : fno.fname);
+					if(is_dir)
+						mark_directory(page_size);
+					/*
+					else {
+						char *t = file_entries[page_size].short_name;
+						if(!strncmp(t, "DISK", 4) && !strncmp(&t[8], ".ATR", 4) && isdigit(t[4]) && isdigit(t[5]) &&isdigit(t[6]) &&isdigit(t[7])) {
+							uint16_t n;
+							sscanf(&t[4], "%04d", &n);
+							if(n > new_file_index)
+								new_file_index = n;
+						}
+					}
+					*/
 					if(!ret || file_entry_cmp(page_size, page_size+1) < 0)
 						file_entries[page_size+1] = file_entries[page_size];
 					ret++;
@@ -487,31 +505,20 @@ const file_type menu_to_type[] = {
 	file_type::casette
 };
 
-// TODO which of these actually need to be volatile?
-
 typedef struct {
 	std::string *str;
-	volatile char *mount_path;
-	volatile bool mounted;
-	/* status:
-		if 0 the file header needs to be processed, if this fails:
-			set mounted to false
-			mark on screen with a suitable icon
-		opening a new file / injecting sets status to 0
-		for C: current index to the file being read to use with f_lseek
-		for Dx: 0 yet to be opened, >0 sector size of the mounted ATR and ATR header verified
-
-	*/
-	volatile FSIZE_t status;
+	char *mount_path;
+	bool mounted;
+	FSIZE_t status;
 } mounts_type;
 
-volatile char d1_mount[256] = {0};
-volatile char d2_mount[256] = {0};
-volatile char d3_mount[256] = {0};
-volatile char d4_mount[256] = {0};
-volatile char c_mount[256] = {0};
+char d1_mount[256] = {0};
+char d2_mount[256] = {0};
+char d3_mount[256] = {0};
+char d4_mount[256] = {0};
+char c_mount[256] = {0};
 
-volatile mounts_type mounts[] = {
+mounts_type mounts[] = {
 	{.str=&str_cas, .mount_path=c_mount, .mounted=false, .status = 0},
 	{.str=&str_d1, .mount_path=d1_mount, .mounted=false, .status = 0},
 	{.str=&str_d2, .mount_path=d2_mount, .mounted=false, .status = 0},
@@ -564,7 +571,6 @@ const uint8_t percom_table[] = {
 
 const int percom_table_size = 4;
 
-
 typedef struct __attribute__((__packed__)) {
 	uint16_t magic;
 	uint16_t pars;
@@ -588,8 +594,8 @@ const uint8_t disk_type_atx = 3;
 
 
 uint8_t locate_percom(int drive_number) {
-	int i=0;
-	uint8_t r=0x80;
+	int i = 0;
+	uint8_t r = 0x80;
 	while(i<percom_table_size) {
 		if(!memcmp(&disk_headers[drive_number-1].data[2], &percom_table[i*13+8], 5)) {
 			r = i;
@@ -776,7 +782,7 @@ int disk_dma_channel, dma_channel, dma_channel_turbo;
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
 // 16*8 also fails sometimes with the 1MHz base clock
-const int pio_queue_size = 32*8;
+const int pio_queue_size = 64*8;
 
 uint32_t pio_e;
 
@@ -971,7 +977,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 		if(op_write) {
 			multicore_lockout_start_blocking();
 			f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
-			f_op_stat = f_sync(&fil);
+			// f_op_stat = f_sync(&fil);
 			multicore_lockout_end_blocking();
 		} else {
 			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
@@ -1273,26 +1279,18 @@ atx_error:
 	return r;
 }
 
-//uint16_t dir_browse_stack[128];
-//uint16_t dir_browse_stack_index=0;
-//volatile uint16_t dir_browse_stack[64];
-//volatile uint16_t dir_browse_stack_index=0;
-
 volatile bool save_config_flag = false;
 volatile bool save_path_flag = false;
 
 const uint32_t flash_save_offset = HW_FLASH_STORAGE_BASE-FLASH_SECTOR_SIZE;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
-//const size_t flash_dir_state_offset = 256;
-const size_t flash_config_offset = 256; // flash_dir_state_offset+128+4;
+const size_t flash_config_offset = 256;
 const size_t flash_check_sig_offset = flash_config_offset+64;
 const uint32_t config_magic = 0xDEADBEEF;
 
 void inline check_and_load_config(bool reset_config) {
 	if(!reset_config && *(uint32_t *)&flash_config_pointer[flash_check_sig_offset] == config_magic) {
 		memcpy(curr_path, &flash_config_pointer[0], 256);
-		//memcpy((void *)dir_browse_stack, &flash_config_pointer[flash_dir_state_offset], 128);
-		//memcpy((void *)&dir_browse_stack_index, &flash_config_pointer[flash_dir_state_offset+128], 2);
 		memcpy(current_options, &flash_config_pointer[flash_config_offset], option_count-1);
 	} else {
 		save_path_flag = true;
@@ -1305,8 +1303,6 @@ void inline check_and_save_config() {
 		return;
 	memset(sector_buffer, 0, sector_buffer_size);
 	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], 256);
-	//memcpy(&sector_buffer[flash_dir_state_offset], save_path_flag ? (void *)dir_browse_stack : &flash_config_pointer[flash_dir_state_offset], 128);
-	//memcpy(&sector_buffer[flash_dir_state_offset+128], save_path_flag ? (void *)&dir_browse_stack_index : &flash_config_pointer[flash_dir_state_offset+128], 2);
 	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
 	multicore_lockout_start_blocking();
@@ -1731,6 +1727,14 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sleep_ms(10);
 				}
 			}
+		}else if(create_new_file) {
+			multicore_lockout_start_blocking();
+			f_mount(&fatfs, "", 1);
+			f_open(&fil, temp_array, FA_CREATE_NEW | FA_WRITE);
+			f_close(&fil);
+			f_mount(0, "", 1);
+			multicore_lockout_end_blocking();
+			create_new_file = false;
 		}else
 			check_and_save_config();
 	}
@@ -1986,12 +1990,12 @@ void update_display_files(int page_index, int shift_index) {
 		graphics.set_pen(BG); graphics.rectangle(r);
 		for(int i = 0; i < num_files_page; i++) {
 			text_location.y = 8*(1+i)*font_scale;
-			if(!i && !page_index && shift_index) {
-				print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
-			} else {
-				int fi = i-shift_index;
-				update_one_display_file(i, fi);
-			}
+			if(!page_index && i < shift_index) {
+				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
+				print_text(*s, i == cursor_position ? (*s).length() : 0);
+				//print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
+			} else
+				update_one_display_file(i, i-shift_index);
 		}
 	}else{
 		int i = cursor_prev;
@@ -1999,9 +2003,11 @@ void update_display_files(int page_index, int shift_index) {
 			text_location.y = 8*(1+i)*font_scale;
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
-			if(!i && !page_index && shift_index)
-				print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
-			else
+			if(!page_index && i < shift_index) {
+				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
+				print_text(*s, i == cursor_position ? (*s).length() : 0);
+				// print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
+			} else
 				update_one_display_file(i, i-shift_index);
 			if(i == cursor_position)
 				break;
@@ -2014,8 +2020,8 @@ void get_file(int file_entry_index) {
 	int saved_cursor_position = cursor_position;
 
 	cursor_prev = -1;
-	cursor_position = 0;
-	int top_index = 0;
+	cursor_position = (ft == file_type::disk) ? 1 : 0;
+	int page_index = 0;
 
 	main_buttons[0].str = &char_left;
 
@@ -2040,7 +2046,7 @@ void get_file(int file_entry_index) {
 			goto get_file_exit;
 		}
 		num_files = r;
-		int shift_index = curr_path[0] ? 1 : 0;
+		int shift_index = (curr_path[0] ? 1 : 0) + (ft == file_type::disk ? 1 : 0);
 		update_buttons(main_buttons, main_buttons_size);
 
 		if(!num_files) {
@@ -2051,11 +2057,11 @@ void get_file(int file_entry_index) {
 
 		int num_pages = (num_files+shift_index+files_per_page-1) / files_per_page;
 		int last_page = (num_files+shift_index) % files_per_page;
-		num_files_page = (top_index == num_pages-1) ? last_page : files_per_page;
+		num_files_page = (page_index == num_pages-1) ? last_page : files_per_page;
 		if(num_files)
-			read_directory(top_index, top_index ? num_files_page : num_files_page-shift_index);
+			read_directory(page_index, page_index ? num_files_page : num_files_page-shift_index);
 		if(num_files || shift_index)
-			update_display_files(top_index, top_index ? 0 : shift_index);
+			update_display_files(page_index, page_index ? 0 : shift_index);
 		int y1 = main_buttons[2].y+10*font_scale, y2 = main_buttons[3].y-2*font_scale;
 		int scroll_block_len = (y2-y1) / num_pages;
 		Rect scroll_bar(st7789.width - 7*font_scale, y1, 4*font_scale, y2-y1);
@@ -2065,13 +2071,13 @@ void get_file(int file_entry_index) {
 		st7789.update(&graphics);
 		while(true) {
 			if(button_y.read()) {
-				if(cursor_position < num_files_page-1 || top_index < num_pages-1) {
-					if(cursor_position == files_per_page-1 && top_index < num_pages-1) {
+				if(cursor_position < num_files_page-1 || page_index < num_pages-1) {
+					if(cursor_position == files_per_page-1 && page_index < num_pages-1) {
 						cursor_prev = -1;
 						cursor_position = 0;
-						top_index++;
-						num_files_page = (top_index == num_pages-1) ? last_page : files_per_page;
-						read_directory(top_index, num_files_page);
+						page_index++;
+						num_files_page = (page_index == num_pages-1) ? last_page : files_per_page;
+						read_directory(page_index, num_files_page);
 						graphics.set_pen(BG); graphics.rectangle(scroll_bar);
 						scroll_bar.y += scroll_block_len;
 						graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
@@ -2080,17 +2086,17 @@ void get_file(int file_entry_index) {
 						cursor_position++;
 					}
 					delete scroll_ptr; scroll_ptr = nullptr;
-					update_display_files(top_index, top_index ? 0 : shift_index);
+					update_display_files(page_index, page_index ? 0 : shift_index);
 					st7789.update(&graphics);
 				}
 			}else if(button_x.read()) {
-				if(cursor_position > 0 || top_index > 0) {
-					if(cursor_position == 0 && top_index > 0) {
+				if(cursor_position > 0 || page_index > 0) {
+					if(cursor_position == 0 && page_index > 0) {
 						cursor_prev = -1;
 						cursor_position = files_per_page-1;
-						top_index--;
+						page_index--;
 						num_files_page = files_per_page;
-						read_directory(top_index, top_index ? num_files_page : num_files_page-shift_index);
+						read_directory(page_index, page_index ? num_files_page : num_files_page-shift_index);
 						graphics.set_pen(BG); graphics.rectangle(scroll_bar);
 						scroll_bar.y -= scroll_block_len;
 						graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
@@ -2099,42 +2105,88 @@ void get_file(int file_entry_index) {
 						cursor_position--;
 					}
 					delete scroll_ptr; scroll_ptr = nullptr;
-					update_display_files(top_index, top_index ? 0 : shift_index);
+					update_display_files(page_index, page_index ? 0 : shift_index);
 					st7789.update(&graphics);
 				}
 			}else if(button_a.read()) {
-				int fi = cursor_position - (top_index ? 0 : shift_index);
+				int fi = cursor_position - (page_index ? 0 : shift_index);
 				int i = strlen(curr_path);
 				delete scroll_ptr; scroll_ptr = nullptr;
-				if(fi == -1) {
-					top_index = 0;
-					cursor_position = 0;
-					cursor_prev = -1;
-					i -= 2;
-					while(curr_path[i] != '/' && i) i--;
-					curr_path[i] = 0;
-					break;
+				if(fi < 0) {
+					if(cursor_position == (ft == file_type::disk ? 1 : 0)) {
+						page_index = 0;
+						// cursor_position = 0;
+						cursor_prev = -1;
+						i -= 2;
+						while(curr_path[i] != '/' && i) i--;
+						curr_path[i] = 0;
+						break;
+					} else {
+						// TODO create new image in current directory dialog
+						// TODO create_new_file should carry much more info:
+						//   in -> disk size and format
+						//   out -> success or failure
+						FILINFO fil_info;
+						FATFS fatfs;
+						int fn = 0;
+						mutex_enter_blocking(&fs_lock);
+						if(f_mount(&fatfs, "", 1) == FR_OK) {
+							for(; fn < 10000; fn++) {
+								sprintf(&curr_path[i], "DISK%04d.ATR", fn);
+								if(f_stat(curr_path, &fil_info) != FR_OK) {
+									strcpy(temp_array, curr_path);
+									create_new_file = true;
+									fn = 10000;
+								}
+							}
+						}
+						f_mount(0, "", 1);
+						mutex_exit(&fs_lock);
+						if(fn == 10001) {
+							while(create_new_file) tight_loop_contents();
+							char *f = &curr_path[i];
+
+							mutex_enter_blocking(&mount_lock);
+							mounts[file_entry_index].mounted = true;
+							mounts[file_entry_index].status = 0;
+							strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
+							int j = 0;
+							int si = (ft == file_type::disk) ? 3 : 2;
+							while(j<12) {
+								(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
+								j++;
+							}
+							mutex_exit(&mount_lock);
+
+						}
+						curr_path[i] = 0;
+						goto get_file_exit;
+					}
 				} else {
 					char *f = file_entries[fi].short_name;
 					if(file_entries[fi].dir) {
-						top_index = 0;
+						page_index = 0;
 						cursor_prev = -1;
-						cursor_position = 0;
+						cursor_position = (ft == file_type::disk) ? 1 : 0;
 						strcpy(&curr_path[i], f);
 						break;
 					} else {
+						strcpy(&curr_path[0], f);
+						// TODO make this a procedure, see above too
 						if(file_entry_index) mutex_enter_blocking(&mount_lock);
 						mounts[file_entry_index].mounted = true;
 						mounts[file_entry_index].status = 0;
-						strcpy((char *)mounts[file_entry_index].mount_path, &curr_path[0]);
-						strcpy((char *)&(mounts[file_entry_index].mount_path[i]), f);
-						i = 0;
+						strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
+						// strcpy((char *)&(mounts[file_entry_index].mount_path[i]), f);
+						int j = 0;
 						int si = (ft == file_type::disk) ? 3 : 2;
-						while(i<12) {
-							(*mounts[file_entry_index].str)[si+i] = (i < strlen(f) ? f[i] : ' ');
-							i++;
+						while(j<12) {
+							(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
+							j++;
 						}
 						if(file_entry_index) mutex_exit(&mount_lock);
+
+						curr_path[i] = 0;
 						goto get_file_exit;
 					}
 				}
