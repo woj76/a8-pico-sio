@@ -340,7 +340,7 @@ char curr_path[256+16] = {0};
 size_t num_files, num_files_page;
 
 char temp_array[256+16];
-volatile bool create_new_file = false;
+volatile int16_t create_new_file = 0;
 
 typedef struct  __attribute__((__packed__)) {
 	bool dir;
@@ -394,7 +394,6 @@ void mark_directory(int i) {
 auto_init_mutex(fs_lock);
 
 uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with a tiny slack
-// uint16_t new_file_index;
 
 // param page_index signed int, -1 count only
 // result -1 error, otherwise files read / counted
@@ -412,8 +411,6 @@ int32_t read_directory(int32_t page_index, int page_size) {
 			ret = 0;
 			uint16_t dir_index = -1;
 			int32_t look_for_index = page_index >= 0 ? next_page_references[page_index] : -1;
-			//if(page_index < 0)
-			//	new_file_index = 0;
 			while (true) {
 				dir_index++;
 				if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
@@ -427,17 +424,6 @@ int32_t read_directory(int32_t page_index, int page_size) {
 					strcpy(file_entries[page_size].short_name, fno.altname[0] ? fno.altname : fno.fname);
 					if(is_dir)
 						mark_directory(page_size);
-					/*
-					else {
-						char *t = file_entries[page_size].short_name;
-						if(!strncmp(t, "DISK", 4) && !strncmp(&t[8], ".ATR", 4) && isdigit(t[4]) && isdigit(t[5]) &&isdigit(t[6]) &&isdigit(t[7])) {
-							uint16_t n;
-							sscanf(&t[4], "%04d", &n);
-							if(n > new_file_index)
-								new_file_index = n;
-						}
-					}
-					*/
 					if(!ret || file_entry_cmp(page_size, page_size+1) < 0)
 						file_entries[page_size+1] = file_entries[page_size];
 					ret++;
@@ -1727,14 +1713,22 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					sleep_ms(10);
 				}
 			}
-		}else if(create_new_file) {
+		}else if(create_new_file > 0) {
+			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
+			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
+			f_op_stat = FR_OK;
 			multicore_lockout_start_blocking();
-			f_mount(&fatfs, "", 1);
-			f_open(&fil, temp_array, FA_CREATE_NEW | FA_WRITE);
+			do {
+				if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+					break;
+				if((f_op_stat = f_open(&fil, temp_array, FA_CREATE_NEW | FA_WRITE)) != FR_OK)
+					break;
+
+			} while(false);
 			f_close(&fil);
 			f_mount(0, "", 1);
 			multicore_lockout_end_blocking();
-			create_new_file = false;
+			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
 		}else
 			check_and_save_config();
 	}
@@ -1749,7 +1743,7 @@ void core1_entry() {
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
-	queue_init(&pio_queue, sizeof(int32_t), pio_queue_size);
+	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
 
 	uint disk_pio_offset = pio_add_program(disk_pio, &disk_counter_program);
 	float disk_clk_divider = (float)clock_get_hz(clk_sys)/1000000;
@@ -1993,7 +1987,6 @@ void update_display_files(int page_index, int shift_index) {
 			if(!page_index && i < shift_index) {
 				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
 				print_text(*s, i == cursor_position ? (*s).length() : 0);
-				//print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
 		}
@@ -2006,7 +1999,6 @@ void update_display_files(int page_index, int shift_index) {
 			if(!page_index && i < shift_index) {
 				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
 				print_text(*s, i == cursor_position ? (*s).length() : 0);
-				// print_text(str_up_dir, i == cursor_position ? str_up_dir.length() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
 			if(i == cursor_position)
@@ -2014,6 +2006,123 @@ void update_display_files(int page_index, int shift_index) {
 			i = cursor_position;
 		}
 	}
+}
+
+const std::string new_image_sd = " SD 90K";
+const std::string new_image_ed = " ED 130K";
+const std::string new_image_dd = " DD 180K";
+const std::string new_image_qd = " QD 360K";
+
+const std::string new_image_none = " None";
+const std::string new_image_dos = " DOS 2.x";
+const std::string new_image_mydos = " MyDOS";
+const std::string new_image_sparta = " SpartaDOS";
+
+const std::string *new_file_options_0[] = { &new_image_sd, &new_image_ed, &new_image_dd, &new_image_qd };
+const std::string *new_file_options_1[] = { &new_image_none, &new_image_dos, &new_image_mydos, &new_image_sparta };
+const std::string *new_file_options_2[] = { &new_image_none, &new_image_mydos, &new_image_sparta };
+
+const uint8_t new_file_options_2_vals[] = {1, 3, 4};
+//const uint16_t new_file_options_0_count = 4;
+
+const std::string new_image_title_0 = "Size?";
+const std::string new_image_title_1 = "Format?";
+
+const std::string *new_file_titles[] = { &new_image_title_0, &new_image_title_1, &new_image_title_1 };
+
+void update_one_new_file_option(int i, int opt_level) {
+	print_text(!opt_level ? *(new_file_options_0[i])  : (opt_level == 1 ? *(new_file_options_1[i]) : *(new_file_options_2[i])) , i == cursor_position ? 12 : 0);
+}
+
+void update_new_file_options(int opt_level) {
+	text_location.x = (4*8)*font_scale;
+	if(cursor_prev == -1) {
+		Rect r(4*8*font_scale, (4*8+4)*font_scale,12*8*font_scale,4*12*font_scale);
+		graphics.set_pen(BG); graphics.rectangle(r);
+		for(int i = 0; i < (opt_level == 2 ? 3 : 4); i++) {
+			text_location.y = (4*8+4+12*i)*font_scale;
+			update_one_new_file_option(i, opt_level);
+		}
+	}else{
+		int i = cursor_prev;
+		while(true) {
+			text_location.y = (4*8+4+12*i)*font_scale;
+			Rect r(text_location.x,text_location.y,12*8*font_scale,8*font_scale);
+			graphics.set_pen(BG); graphics.rectangle(r);
+			update_one_new_file_option(i, opt_level);
+			if(i == cursor_position)
+				break;
+			i = cursor_position;
+		}
+	}
+}
+
+
+int16_t select_new_file_options(int selections, int opt_level) {
+	cursor_position = 0;
+	cursor_prev = -1;
+	text_location.x = (4*8)*font_scale;
+	text_location.y = 8*3*font_scale;
+	Rect r(text_location.x,text_location.y,12*8*font_scale,8*font_scale);
+	graphics.set_pen(BG); graphics.rectangle(r);
+	print_text(*(new_file_titles[opt_level]));
+
+	update_new_file_options(opt_level);
+	st7789.update(&graphics);
+
+	while(true) {
+		if(button_y.read()) {
+			if(cursor_position < (opt_level == 2 ? 2 : 3)) {
+				cursor_prev = cursor_position;
+				cursor_position++;
+				update_new_file_options(opt_level);
+				st7789.update(&graphics);
+			}
+		}else if(button_x.read()) {
+			if(cursor_position > 0) {
+				cursor_prev = cursor_position;
+				cursor_position--;
+				update_new_file_options(opt_level);
+				st7789.update(&graphics);
+			}
+		}else if(button_a.read()) {
+			if(!opt_level) {
+				selections == (cursor_position+1);
+			}else{
+				selections |= ((opt_level == 2 ? new_file_options_2_vals[cursor_position] : cursor_position+1) & 0xF) << 4;
+			}
+			if(opt_level > 0)
+				return selections;
+			else
+				return select_new_file_options(selections, (cursor_position < 3) ? 1 : 2);
+		} else if(button_b.read()) {
+			return 0;
+		}
+		sleep_ms(20);
+	}
+}
+
+void mount_file(char *f, int file_entry_index) {
+	int j;
+	if(file_entry_index) {
+		for(j=1; j<=4; j++) {
+			if(j == file_entry_index)
+				continue;
+			if(!strcmp(mounts[j].mount_path, curr_path))
+				return;
+		}
+		mutex_enter_blocking(&mount_lock);
+	}
+	mounts[file_entry_index].mounted = true;
+	mounts[file_entry_index].status = 0;
+	strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
+	j = 0;
+	int si = (ft == file_type::disk) ? 3 : 2;
+	while(j<12) {
+		(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
+		j++;
+	}
+	if(file_entry_index) mutex_exit(&mount_lock);
 }
 
 void get_file(int file_entry_index) {
@@ -2135,7 +2244,6 @@ void get_file(int file_entry_index) {
 								sprintf(&curr_path[i], "DISK%04d.ATR", fn);
 								if(f_stat(curr_path, &fil_info) != FR_OK) {
 									strcpy(temp_array, curr_path);
-									create_new_file = true;
 									fn = 10000;
 								}
 							}
@@ -2143,21 +2251,19 @@ void get_file(int file_entry_index) {
 						f_mount(0, "", 1);
 						mutex_exit(&fs_lock);
 						if(fn == 10001) {
-							while(create_new_file) tight_loop_contents();
+							graphics.set_pen(BG); graphics.rectangle(scroll_bar);
+							Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,files_per_page*8*font_scale);
+							graphics.rectangle(r);
 							char *f = &curr_path[i];
-
-							mutex_enter_blocking(&mount_lock);
-							mounts[file_entry_index].mounted = true;
-							mounts[file_entry_index].status = 0;
-							strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
-							int j = 0;
-							int si = (ft == file_type::disk) ? 3 : 2;
-							while(j<12) {
-								(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
-								j++;
+							text_location.x = 4*8*font_scale;
+							text_location.y = 8*font_scale;
+							print_text(f);
+							create_new_file = select_new_file_options(0, 0);
+							if(create_new_file) {
+								while(create_new_file > 0) tight_loop_contents();
+								if(!create_new_file)
+									mount_file(f, file_entry_index);
 							}
-							mutex_exit(&mount_lock);
-
 						}
 						curr_path[i] = 0;
 						goto get_file_exit;
@@ -2172,20 +2278,7 @@ void get_file(int file_entry_index) {
 						break;
 					} else {
 						strcpy(&curr_path[0], f);
-						// TODO make this a procedure, see above too
-						if(file_entry_index) mutex_enter_blocking(&mount_lock);
-						mounts[file_entry_index].mounted = true;
-						mounts[file_entry_index].status = 0;
-						strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
-						// strcpy((char *)&(mounts[file_entry_index].mount_path[i]), f);
-						int j = 0;
-						int si = (ft == file_type::disk) ? 3 : 2;
-						while(j<12) {
-							(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
-							j++;
-						}
-						if(file_entry_index) mutex_exit(&mount_lock);
-
+						mount_file(f, file_entry_index);
 						curr_path[i] = 0;
 						goto get_file_exit;
 					}
