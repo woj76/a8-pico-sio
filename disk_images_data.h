@@ -136,3 +136,17 @@ const uint8_t dd_sparta_disk[] = {
 	0x4D, 0x41, 0x49, 0x4E, 0x07, 0x00, 0x00, 0x00, 0x20, 0xEF, 0xCA, 0x02, 0x00, 0x00
 };
 const uint dd_sparta_disk_len = 142;
+
+const uint8_t *disk_images_data[4][4] {
+	{sd_empty_disk, sd_dos_disk, sd_mydos_disk, sd_sparta_disk},
+	{ed_empty_disk, ed_dos_disk, ed_mydos_disk, ed_sparta_disk},
+	{dd_empty_disk, dd_dos_disk, dd_mydos_disk, dd_sparta_disk},
+	{qd_empty_disk, nullptr, qd_mydos_disk, qd_sparta_disk}
+};
+
+const uint disk_images_size[4][4] {
+	{sd_empty_disk_len, sd_dos_disk_len, sd_mydos_disk_len, sd_sparta_disk_len},
+	{ed_empty_disk_len, ed_dos_disk_len, ed_mydos_disk_len, ed_sparta_disk_len},
+	{dd_empty_disk_len, dd_dos_disk_len, dd_mydos_disk_len, dd_sparta_disk_len},
+	{qd_empty_disk_len, 0, qd_mydos_disk_len, qd_sparta_disk_len}
+};

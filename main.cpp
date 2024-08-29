@@ -1301,6 +1301,8 @@ void inline check_and_save_config() {
 	save_config_flag = false;
 }
 
+#include "disk_images_data.h"
+
 void main_sio_loop(uint sm, uint sm_turbo) {
 	FATFS fatfs;
 	FIL fil;
@@ -1716,14 +1718,45 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		}else if(create_new_file > 0) {
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
+			// bool new_file_boot = ((create_new_file >> 8 ) & 0x1);
+			bool new_file_boot = true;
 			f_op_stat = FR_OK;
+			uint disk_image_size = disk_images_size[new_file_size_index][new_file_format_index];
+			memcpy(sector_buffer, (uint8_t *)(disk_images_data[new_file_size_index][new_file_format_index]), disk_image_size);
+			if(new_file_boot)
+				memcpy(&sector_buffer[256], dummy_boot, dummy_boot_len);
+			uint32_t bs;
 			multicore_lockout_start_blocking();
 			do {
 				if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 					break;
 				if((f_op_stat = f_open(&fil, temp_array, FA_CREATE_NEW | FA_WRITE)) != FR_OK)
 					break;
-
+				uint ind=0;
+				while(ind < disk_image_size) {
+					memcpy(&bs, &sector_buffer[ind], 4);
+					ind += 4;
+					bool nrb = (bs & 0x80000000) ? true : false;
+					bs &= 0x7FFFFFFF;
+					while(bs > 0) {
+						if(f_putc(sector_buffer[ind], &fil) == -1) {
+							f_op_stat = FR_INT_ERR;
+							break;
+						}
+						if(nrb) ind++;
+						bs--;
+					}
+					if(f_op_stat != FR_OK)
+						break;
+					if(!nrb) ind++;
+				}
+				if(f_op_stat != FR_OK || !new_file_boot)
+					break;
+				if((f_op_stat = f_lseek(&fil, 16)) != FR_OK)
+					break;
+				f_op_stat = f_write(&fil, &sector_buffer[256], dummy_boot_len, &ind);
+				//if(ind != dummy_boot_len)
+				//	f_op_stat = FR_INT_ERR;
 			} while(false);
 			f_close(&fil);
 			f_mount(0, "", 1);
@@ -2087,9 +2120,9 @@ int16_t select_new_file_options(int selections, int opt_level) {
 			}
 		}else if(button_a.read()) {
 			if(!opt_level) {
-				selections == (cursor_position+1);
+				selections = (cursor_position+1);
 			}else{
-				selections |= ((opt_level == 2 ? new_file_options_2_vals[cursor_position] : cursor_position+1) & 0xF) << 4;
+				selections |= ((opt_level == 2 ? new_file_options_2_vals[cursor_position] : (cursor_position+1)) & 0xF) << 4;
 			}
 			if(opt_level > 0)
 				return selections;
@@ -2231,10 +2264,6 @@ void get_file(int file_entry_index) {
 						curr_path[i] = 0;
 						break;
 					} else {
-						// TODO create new image in current directory dialog
-						// TODO create_new_file should carry much more info:
-						//   in -> disk size and format
-						//   out -> success or failure
 						FILINFO fil_info;
 						FATFS fatfs;
 						int fn = 0;
