@@ -2330,20 +2330,10 @@ void get_file(int file_entry_index) {
 								Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
 								graphics.set_pen(BG); graphics.rectangle(r2);
 								st7789.update(&graphics);
-								if(!create_new_file) {
-									text_location.x = str_x(str_creating.length());
-									text_location.y = (14*8-4)*font_scale;
-									print_text(str_creating, str_creating.length());
-									st7789.update(&graphics);
-									create_new_file = cnf;
-									while(create_new_file > 0) tight_loop_contents();
+								if(!create_new_file)
 									mount_file(f, file_entry_index);
-									Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
-									graphics.set_pen(BG); graphics.rectangle(r2);
-									st7789.update(&graphics);
-								}else{
+								else
 									print_text_wait(str_create_failed);
-								}
 							}
 							//else
 								// Cancelled
