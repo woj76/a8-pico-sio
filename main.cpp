@@ -58,6 +58,8 @@ const std::string str_new_image = "New image...>";
 const std::string str_no_files = "[No files!]";
 const std::string str_no_media = "No media!?";
 const std::string str_config2 = "Config";
+const std::string str_creating = " Creating... ";
+const std::string str_create_failed = "Create failed!";
 
 std::string char_empty = " ";
 std::string char_up = "!";
@@ -91,6 +93,7 @@ const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
 	WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC);
 
+
 void print_text(const std::string_view &t, int inverse=0) {
 	graphics.set_pen(WHITE);
 	if(inverse) {
@@ -98,6 +101,17 @@ void print_text(const std::string_view &t, int inverse=0) {
 		graphics.rectangle(rect); graphics.set_pen(BG);
 	}
 	graphics.text(t, text_location, st7789.width, font_scale, 0.0, 0, true);
+}
+
+void print_text_wait(const std::string_view &t) {
+	text_location.x = str_x(t.length());
+	text_location.y = (14*8-4)*font_scale;
+	print_text(t, t.length());
+	st7789.update(&graphics);
+	sleep_ms(2000);
+	Rect r(text_location.x,text_location.y,8*t.length(),8*font_scale);
+	graphics.set_pen(BG); graphics.rectangle(r);
+	st7789.update(&graphics);
 }
 
 void cdc_task(void) {
@@ -2305,18 +2319,37 @@ void get_file(int file_entry_index) {
 							text_location.x = 4*8*font_scale;
 							text_location.y = 8*font_scale;
 							print_text(f);
-							create_new_file = select_new_file_options(0, 0);
-							if(create_new_file) {
+							int16_t cnf = select_new_file_options(0, 0);
+							if(cnf) {
+								text_location.x = str_x(str_creating.length());
+								text_location.y = (14*8-4)*font_scale;
+								print_text(str_creating, str_creating.length());
+								st7789.update(&graphics);
+								create_new_file = cnf;
 								while(create_new_file > 0) tight_loop_contents();
+								Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
+								graphics.set_pen(BG); graphics.rectangle(r2);
+								st7789.update(&graphics);
 								if(!create_new_file) {
+									text_location.x = str_x(str_creating.length());
+									text_location.y = (14*8-4)*font_scale;
+									print_text(str_creating, str_creating.length());
+									st7789.update(&graphics);
+									create_new_file = cnf;
+									while(create_new_file > 0) tight_loop_contents();
 									mount_file(f, file_entry_index);
+									Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
+									graphics.set_pen(BG); graphics.rectangle(r2);
+									st7789.update(&graphics);
+								}else{
+									print_text_wait(str_create_failed);
 								}
-								// should be -1 Failed
 							}
 							//else
 								// Cancelled
 							//	create_new_file = -2;
-						}
+						} else
+							print_text_wait(str_create_failed);
 						//else
 							// No more files possible
 						//	create_new_file = -3;
