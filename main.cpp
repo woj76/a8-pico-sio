@@ -1718,8 +1718,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		}else if(create_new_file > 0) {
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
-			// bool new_file_boot = ((create_new_file >> 8 ) & 0x1);
-			bool new_file_boot = true;
+			bool new_file_boot = ((create_new_file >> 8 ) & 0x1);
 			f_op_stat = FR_OK;
 			uint disk_image_size = disk_images_size[new_file_size_index][new_file_format_index];
 			memcpy(sector_buffer, (uint8_t *)(disk_images_data[new_file_size_index][new_file_format_index]), disk_image_size);
@@ -2050,21 +2049,25 @@ const std::string new_image_none = " None";
 const std::string new_image_dos = " DOS 2.x";
 const std::string new_image_mydos = " MyDOS";
 const std::string new_image_sparta = " SpartaDOS";
+const std::string new_image_yes = " Yes";
+const std::string new_image_no = " No";
 
 const std::string *new_file_options_0[] = { &new_image_sd, &new_image_ed, &new_image_dd, &new_image_qd };
 const std::string *new_file_options_1[] = { &new_image_none, &new_image_dos, &new_image_mydos, &new_image_sparta };
 const std::string *new_file_options_2[] = { &new_image_none, &new_image_mydos, &new_image_sparta };
+const std::string *new_file_options_3[] = { &new_image_yes, &new_image_no };
 
 const uint8_t new_file_options_2_vals[] = {1, 3, 4};
 //const uint16_t new_file_options_0_count = 4;
 
 const std::string new_image_title_0 = "Size?";
 const std::string new_image_title_1 = "Format?";
+const std::string new_image_title_2 = "Dummy boot?";
 
-const std::string *new_file_titles[] = { &new_image_title_0, &new_image_title_1, &new_image_title_1 };
+const std::string *new_file_titles[] = { &new_image_title_0, &new_image_title_1, &new_image_title_1, &new_image_title_2 };
 
 void update_one_new_file_option(int i, int opt_level) {
-	print_text(!opt_level ? *(new_file_options_0[i])  : (opt_level == 1 ? *(new_file_options_1[i]) : *(new_file_options_2[i])) , i == cursor_position ? 12 : 0);
+	print_text(!opt_level ? *(new_file_options_0[i])  : (opt_level == 1 ? *(new_file_options_1[i]) : (opt_level == 3 ? *(new_file_options_3[i]) : *(new_file_options_2[i]))) , i == cursor_position ? 12 : 0);
 }
 
 void update_new_file_options(int opt_level) {
@@ -2072,7 +2075,7 @@ void update_new_file_options(int opt_level) {
 	if(cursor_prev == -1) {
 		Rect r(4*8*font_scale, (4*8+4)*font_scale,12*8*font_scale,4*12*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
-		for(int i = 0; i < (opt_level == 2 ? 3 : 4); i++) {
+		for(int i = 0; i < (opt_level == 2 ? 3 : (opt_level == 3 ? 2 : 4)); i++) {
 			text_location.y = (4*8+4+12*i)*font_scale;
 			update_one_new_file_option(i, opt_level);
 		}
@@ -2105,7 +2108,7 @@ int16_t select_new_file_options(int selections, int opt_level) {
 
 	while(true) {
 		if(button_y.read()) {
-			if(cursor_position < (opt_level == 2 ? 2 : 3)) {
+			if(cursor_position < (opt_level == 2 ? 2 : (opt_level == 3 ? 1 : 3))) {
 				cursor_prev = cursor_position;
 				cursor_position++;
 				update_new_file_options(opt_level);
@@ -2119,15 +2122,18 @@ int16_t select_new_file_options(int selections, int opt_level) {
 				st7789.update(&graphics);
 			}
 		}else if(button_a.read()) {
-			if(!opt_level) {
-				selections = (cursor_position+1);
-			}else{
-				selections |= ((opt_level == 2 ? new_file_options_2_vals[cursor_position] : (cursor_position+1)) & 0xF) << 4;
+			int li;
+			switch(opt_level) {
+				case 0: selections = (cursor_position+1); return select_new_file_options(selections, (cursor_position < 3) ? 1 : 2);
+				case 1: selections |= ((cursor_position+1) & 0xF) << 4; li = 3; break;
+				case 2: selections |= (new_file_options_2_vals[cursor_position] & 0xF) << 4; li = 2; break;
+				case 3: selections |= (cursor_position == 0) ? 0x100 : 0; return selections;
+				default: break;
 			}
-			if(opt_level > 0)
-				return selections;
+			if(cursor_position > 0 && cursor_position < li)
+				return select_new_file_options(selections, 3);
 			else
-				return select_new_file_options(selections, (cursor_position < 3) ? 1 : 2);
+				return selections;
 		} else if(button_b.read()) {
 			return 0;
 		}
