@@ -14,6 +14,8 @@ const uint8_t dummy_boot[] = {
 };
 const uint dummy_boot_len = 0xBC;
 
+const uint32_t image_sizes[] = { 92176, 133136, 183952, 368272 };
+
 const uint8_t sd_empty_disk[] = { 0x05, 0x00, 0x00, 0x80, 0x96, 0x02, 0x80, 0x16, 0x80, 0x0B, 0x68, 0x01, 0x00, 0x00 };
 const uint sd_empty_disk_len = 0x0E;
 

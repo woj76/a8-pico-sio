@@ -1718,6 +1718,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		}else if(create_new_file > 0) {
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
+			uint32_t image_size = image_sizes[new_file_size_index];
 			bool new_file_boot = ((create_new_file >> 8 ) & 0x1);
 			f_op_stat = FR_OK;
 			uint disk_image_size = disk_images_size[new_file_size_index][new_file_format_index];
@@ -1729,6 +1730,19 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			do {
 				if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 					break;
+#if FF_MAX_SS != FF_MIN_SS
+				bs = fatfs.csize * fatfs.ssize;
+#else
+				bs = fatfs.csize * FF_MAX_SS;
+#endif
+				image_size = (image_size + bs - 1) / bs;
+				FATFS *ff;
+				if((f_op_stat = f_getfree("", &bs, &ff)) != FR_OK)
+					break;
+				if(bs < image_size) {
+					f_op_stat = FR_INT_ERR;
+					break;
+				}
 				if((f_op_stat = f_open(&fil, temp_array, FA_CREATE_NEW | FA_WRITE)) != FR_OK)
 					break;
 				uint ind=0;
@@ -1754,8 +1768,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				if((f_op_stat = f_lseek(&fil, 16)) != FR_OK)
 					break;
 				f_op_stat = f_write(&fil, &sector_buffer[256], dummy_boot_len, &ind);
-				//if(ind != dummy_boot_len)
-				//	f_op_stat = FR_INT_ERR;
 			} while(false);
 			f_close(&fil);
 			f_mount(0, "", 1);
@@ -2296,12 +2308,22 @@ void get_file(int file_entry_index) {
 							create_new_file = select_new_file_options(0, 0);
 							if(create_new_file) {
 								while(create_new_file > 0) tight_loop_contents();
-								if(!create_new_file)
+								if(!create_new_file) {
 									mount_file(f, file_entry_index);
+								}
+								// should be -1 Failed
 							}
+							//else
+								// Cancelled
+							//	create_new_file = -2;
 						}
+						//else
+							// No more files possible
+						//	create_new_file = -3;
 						curr_path[i] = 0;
+						// if(create_new_file >= 0)
 						goto get_file_exit;
+						// cursor_prev = -1;
 					}
 				} else {
 					char *f = file_entries[fi].short_name;
