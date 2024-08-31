@@ -1977,6 +1977,8 @@ const menu_entry menu_entries[] = {
 };
 const size_t menu_entry_size = 9;
 
+const uint mount_to_menu[] = {7,1,2,3,4};
+
 typedef struct {
 	std::string *str;
 	int x, y;
@@ -2800,6 +2802,19 @@ int main() {
 		graphics.rectangle(rt);
 		print_text(txt_buf);
 */
+		for(int i=0; i<5; i++) {
+			d = mount_to_menu[i];
+			Pen pp;
+			if(!mounts[i].mounted)
+				pp = WHITE;
+			else
+				pp = mounts[i].rw;
+			graphics.set_pen(BG);
+			Rect rr(menu_entries[d].x-8*font_scale,menu_entries[d].y,8*font_scale,8*font_scale);
+			graphics.rectangle(rr);
+			graphics.set_pen(pp);
+			graphics.rectangle(rr);
+		}
 		st7789.update(&graphics);
 		sleep_ms(20);
 	}
