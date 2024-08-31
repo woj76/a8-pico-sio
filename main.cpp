@@ -30,6 +30,7 @@
 #include "hardware/structs/bus_ctrl.h"
 #include "tusb.h"
 #include "fatfs_disk.h"
+#include "flash_fs.h"
 #include "ff.h"
 
 #include "libraries/pico_display_2/pico_display_2.hpp"
@@ -49,10 +50,10 @@
 const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
 const std::string str_file_transfer = "File transfer...";
-const std::string str_press_a_1 = "Press ";
-const std::string str_press_a_2 = "A";
-const std::string str_press_a_3 = " for";
-const std::string str_press_a_4 = "USB drive...";
+
+const std::string str_press_1 = "USB drive";
+const std::string str_press_2 = "Config reset";
+
 const std::string str_up_dir = "../";
 const std::string str_new_image = "New image...>";
 const std::string str_no_files = "[No files!]";
@@ -60,6 +61,19 @@ const std::string str_no_media = "No media!?";
 const std::string str_config2 = "Config";
 const std::string str_creating = " Creating... ";
 const std::string str_create_failed = "Create failed!";
+
+const std::string str_about1 = "A8 Pico SIO";
+const std::string str_about2 = "by woj@AtariAge";
+const std::string str_about3 = "(c) 2024";
+const std::string str_about4 = "Inspired by and";
+const std::string str_about5 = "based on code of";
+const std::string str_about6 = "A8PicoCart";
+const std::string str_about7 = "SIO2BSD";
+const std::string str_about8 = "SDriveMAX";
+const std::string str_about9 = "Altirra";
+const std::string str_about10 = "EclaireXL";
+const std::string str_about11 = "Version 0.90";
+const std::string str_about12 = "HW: Pico2 4MB";
 
 std::string char_empty = " ";
 std::string char_up = "!";
@@ -79,7 +93,7 @@ PicoGraphics_PenP4 graphics(st7789.width, st7789.height, nullptr);
 uint32_t inline str_x(uint32_t l) { return (st7789.width - l*8*font_scale)/2; }
 uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
-Point text_location(str_x(str_press_a_4.length()), str_y(5)-4*font_scale);
+Point text_location(str_x(str_press_2.length()+2), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
 
@@ -495,9 +509,9 @@ std::string str_d4 = "D4:  <EMPTY>   ";
 const std::string str_rot_up = "Rotate Up";
 const std::string str_rot_down = "Rotate Down";
 std::string str_cas = "C:  <EMPTY>   ";
-// const std::string str_rewind = "Rewind";
+const std::string str_about = "About...";
 
-const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0};
+const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
 const file_type menu_to_type[] = {
 	file_type::none,
 	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
@@ -1897,11 +1911,10 @@ const menu_entry menu_entries[] = {
 	{.str = &str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
 	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
 	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
-	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()}
-	// TODO Make this a nice About... screen
-	//{.str = (std::string*)&str_rewind,.x=7*8*font_scale,.y=(13*8+4)*font_scale,.wd=str_rewind.length()},
+	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
+	{.str = (std::string*)&str_about,.x=(6*8+4)*font_scale,.y=(13*8+4)*font_scale,.wd=str_about.length()}
 };
-const size_t menu_entry_size = 8;
+const size_t menu_entry_size = 9;
 
 typedef struct {
 	std::string *str;
@@ -2528,6 +2541,60 @@ restart_options:
 	cursor_prev = -1;
 }
 
+void show_about() {
+	graphics.set_pen(BG); graphics.clear();
+	text_location.x = str_x(str_about1.length());
+	text_location.y = 4*font_scale;
+	print_text(str_about1, str_about1.length());
+
+	text_location.x = str_x(str_about2.length());
+	text_location.y += 10*font_scale;
+	print_text(str_about2);
+
+	text_location.x = str_x(str_about3.length());
+	text_location.y += 10*font_scale;
+	print_text(str_about3);
+
+	text_location.x = str_x(str_about4.length());
+	text_location.y += 16*font_scale;
+	print_text(str_about4);
+
+	text_location.x = str_x(str_about5.length());
+	text_location.y += 10*font_scale;
+	print_text(str_about5);
+
+	text_location.x = str_x(str_about6.length()+str_about7.length()+1);
+	text_location.y += 12*font_scale;
+	print_text(str_about6, str_about6.length());
+	text_location.x += font_scale*8*(1+ str_about6.length());
+	print_text(str_about7, str_about7.length());
+
+	text_location.x = str_x(str_about8.length()+str_about9.length()+1);
+	text_location.y += 10*font_scale;
+	print_text(str_about8, str_about8.length());
+	text_location.x += font_scale*8*(1+ str_about8.length());
+	print_text(str_about9, str_about9.length());
+
+	text_location.x = str_x(str_about10.length());
+	text_location.y += 10*font_scale;
+	print_text(str_about10, str_about10.length());
+
+	text_location.x = str_x(str_about11.length());
+	text_location.y += 16*font_scale;
+	print_text(str_about11);
+
+#ifdef PICO_BOARD
+	sprintf(temp_array, "HW: %s %dMB", PICO_BOARD, BOARD_SIZE);
+#else
+	sprintf(temp_array, "HW: Pico %dMB", PICO_BOARD, BOARD_SIZE);
+#endif
+	text_location.x = str_x(strlen(temp_array));
+	text_location.y += 10*font_scale;
+	print_text(temp_array);
+	st7789.update(&graphics);
+	while(!(button_a.read() || button_b.read() || button_x.read() || button_y.read())) tight_loop_contents();
+}
+
 int main() {
 	// stdio_init_all();
 	// set_sys_clock_khz(250000, true);
@@ -2538,34 +2605,35 @@ int main() {
 	graphics.set_font(&atari_font);
 	graphics.set_pen(BG); graphics.clear();
 
-	if(!button_a.read()) {
-		int x = text_location.x;
-		print_text(str_press_a_1);
-		text_location.x += str_press_a_1.length()*8*font_scale;
-		print_text(str_press_a_2, 1);
-		text_location.x += 8*font_scale;
-		print_text(str_press_a_3);
-		text_location.x = x;
-		text_location.y += 12*font_scale;
-		print_text(str_press_a_4);
-		st7789.update(&graphics);
-	}else
+	if(button_a.read())
 		usb_drive();
 
-	ProgressBar pg(200, text_location.y+16*font_scale, true);
+	int x = text_location.x;
+	print_text("A", 1); text_location.x += 2*8*font_scale;
+	print_text(str_press_1);
+	text_location.x = x; text_location.y += 12*font_scale;
+	print_text("B", 1); text_location.x += 2*8*font_scale;
+	print_text(str_press_2);
+	st7789.update(&graphics);
+
+	ProgressBar pg(208, text_location.y+16*font_scale, true);
 	pg.init();
 	st7789.update(&graphics);
 	uint32_t boot_time;
+	bool b_pressed = false;
 	do {
 		boot_time = to_ms_since_boot(get_absolute_time());
 		pg.update(200*boot_time/usb_boot_delay);
 		st7789.update(&graphics);
+		b_pressed = button_b.read();
+		if(b_pressed)
+			break;
 		if(button_a.read())
 			usb_drive();
 		sleep_ms(1000/60);
 	}while(boot_time <= usb_boot_delay);
 
-	check_and_load_config(button_b.read());
+	check_and_load_config(b_pressed);
 
 	tud_mount_cb();
 	multicore_launch_core1(core1_entry);
@@ -2609,7 +2677,8 @@ int main() {
 					mutex_exit(&mount_lock);
 					cursor_prev = -1;
 				}else if(cursor_position == 8) {
-					// TODO React to About... option
+					show_about();
+					cursor_prev = -1;
 				}
 				update_main_menu();
 			}else{
@@ -2637,7 +2706,7 @@ int main() {
 		}
 		FSIZE_t s = mounts[0].status;
 		if(cursor_prev == -1 || (mounts[0].mounted && s != last_cas_offset)) {
-			if(s == -1) s = 0;
+			if(s < 0) s = 0;
 			cas_pg.update(cas_pg_width*s/cas_size);
 			last_cas_offset = s;
 		}
