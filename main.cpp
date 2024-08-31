@@ -117,7 +117,12 @@ void print_text(const std::string_view &t, int inverse=0) {
 	graphics.text(t, text_location, st7789.width, font_scale, 0.0, 0, true);
 }
 
+volatile int8_t red_blinks = 0;
+volatile int8_t green_blinks = 0;
+volatile int8_t blue_blinks = 0;
+
 void print_text_wait(const std::string_view &t) {
+	red_blinks = 6;
 	text_location.x = str_x(t.length());
 	text_location.y = (14*8-4)*font_scale;
 	print_text(t, t.length());
@@ -148,6 +153,34 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	st7789.update(&graphics);
 	return true;
 }
+
+bool repeating_timer_led(struct repeating_timer *t) {
+	uint8_t r = 0;
+	uint8_t g = 0;
+	uint8_t b = 0;
+
+	if(red_blinks == -1)
+		r = 255;
+	else if(red_blinks) {
+		if(!(red_blinks % 2)) r = 255;
+		red_blinks--;
+	}
+	if(green_blinks == -1)
+		g = 255;
+	else if(green_blinks) {
+		if(!(green_blinks % 2)) g = 255;
+		green_blinks--;
+	}
+	if(blue_blinks == -1)
+		b = 255;
+	else if(blue_blinks) {
+		if(!(blue_blinks % 2)) b = 255;
+		blue_blinks--;
+	}
+	led.set_rgb(r,g,b);
+	return true;
+}
+
 
 std::string *ptr_str_file_name;
 
@@ -911,11 +944,13 @@ bool try_get_sio_command() {
 		r = false;
 	if(high_speed >= 0 && desync == desync_retries && current_options[hsio_option_index]) {
 		high_speed ^= 1;
+		/*
 		if(high_speed) {
 			led.set_rgb(0,0,255);
 		} else {
 			led.set_rgb(255,0,0);
 		}
+		*/
 		desync = high_speed ? current_options[hsio_option_index] : 0;
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[desync] : hsio_opt_to_baud_pal[desync]);
 		desync = 0;
@@ -1421,9 +1456,14 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			f_mount(0, "", 1);
 			mutex_exit(&fs_lock);
 			if(i) mutex_exit(&mount_lock);
+			if(mounts[i].mounted)
+				if(green_blinks != -1) green_blinks += 4;
+			else
+				if(red_blinks != -1) red_blinks += 4;
 		}
 
 		if(try_get_sio_command()) {
+			if(high_speed == 1) blue_blinks = -1;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
 #ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
@@ -1648,7 +1688,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				uart_tx_wait_blocking(uart1);
 				if(sio_command.command_id == '?') {
 					high_speed = 1;
-					led.set_rgb(0,255,0);
+					// led.set_rgb(0,255,0);
 					r = current_options[hsio_option_index];
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
 				}
@@ -1663,6 +1703,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				mounts[0].status = 0;
 				continue;
 			}
+			if(cas_block_turbo) blue_blinks = -1;
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
@@ -1744,6 +1785,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 			}
 		}else if(create_new_file > 0) {
+			blue_blinks = 0;
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
 			uint32_t image_size = image_sizes[new_file_size_index];
@@ -1801,8 +1843,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			f_mount(0, "", 1);
 			multicore_lockout_end_blocking();
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
-		}else
+		}else {
+			blue_blinks = 0;
 			check_and_save_config();
+		}
 	}
 }
 
@@ -2180,14 +2224,14 @@ int16_t select_new_file_options(int selections, int opt_level) {
 	}
 }
 
-void mount_file(char *f, int file_entry_index) {
+bool mount_file(char *f, int file_entry_index) {
 	int j;
 	if(file_entry_index) {
 		for(j=1; j<=4; j++) {
 			if(j == file_entry_index)
 				continue;
 			if(!strcmp(mounts[j].mount_path, curr_path))
-				return;
+				return false;
 		}
 		mutex_enter_blocking(&mount_lock);
 	}
@@ -2201,6 +2245,7 @@ void mount_file(char *f, int file_entry_index) {
 		j++;
 	}
 	if(file_entry_index) mutex_exit(&mount_lock);
+	return true;
 }
 
 void get_file(int file_entry_index) {
@@ -2343,9 +2388,11 @@ void get_file(int file_entry_index) {
 								Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
 								graphics.set_pen(BG); graphics.rectangle(r2);
 								st7789.update(&graphics);
-								if(!create_new_file)
-									mount_file(f, file_entry_index);
-								else
+								if(!create_new_file) {
+									if(!mount_file(f, file_entry_index))
+										red_blinks = 6;
+
+								} else
 									print_text_wait(str_create_failed);
 							}
 							//else
@@ -2371,7 +2418,8 @@ void get_file(int file_entry_index) {
 						break;
 					} else {
 						strcpy(&curr_path[0], f);
-						mount_file(f, file_entry_index);
+						if(!mount_file(f, file_entry_index))
+							red_blinks = 6;
 						curr_path[i] = 0;
 						goto get_file_exit;
 					}
@@ -2600,11 +2648,20 @@ int main() {
 	// set_sys_clock_khz(250000, true);
 	multicore_lockout_victim_init();
 	led.set_rgb(0, 0, 0);
+	led.set_brightness(128);
 	st7789.set_backlight(255);
 
 	graphics.set_font(&atari_font);
 	graphics.set_pen(BG); graphics.clear();
 
+	struct repeating_timer tmr;
+	add_repeating_timer_ms(250, repeating_timer_led, NULL, &tmr);
+
+	// if not sd card {
+	//	red_blinks = 6;
+	//	green_blinks = 6;
+	//	blue_blinks = 6;
+	// }
 	if(button_a.read())
 		usb_drive();
 
