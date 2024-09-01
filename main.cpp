@@ -917,6 +917,8 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 
 const uint32_t serial_read_timeout = 5000;
 const uint16_t desync_retries = 1;
+//uint8_t no_sio_count = 0;
+
 
 auto_init_mutex(mount_lock);
 
@@ -926,12 +928,20 @@ bool try_get_sio_command() {
 	// should not be interrupted
 	static uint16_t desync = 0;
 	static int last_drive = -1;
-	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
-		return false;
-	mutex_enter_blocking(&mount_lock);
 	bool r = true;
 	int i=0;
+	mutex_enter_blocking(&mount_lock);
+	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin)) {
+		r = false;
+		blue_blinks = 0;
+		goto try_sio_exit;
+	}
 	memset(&sio_command, 0x01, 5);
+	// HiassofT suggests that if bytes == 5 with wrong checksum only or only a single framing error
+	// repeat once without changing the speed
+	// wrong #of bytes, multiple framing errors
+	// continue reading while command line pin is low? When to break this? Let's say after 64?!
+
 	while(i<5 && uart_is_readable_within_us(uart1, serial_read_timeout) && !uart_get_hw(uart1)->rsr)
 		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
 	if(gpio_get(command_line_pin) || uart_get_hw(uart1)->rsr || i != 5 ||
@@ -948,13 +958,6 @@ bool try_get_sio_command() {
 		r = false;
 	if(high_speed >= 0 && desync == desync_retries && current_options[hsio_option_index]) {
 		high_speed ^= 1;
-		/*
-		if(high_speed) {
-			led.set_rgb(0,0,255);
-		} else {
-			led.set_rgb(255,0,0);
-		}
-		*/
 		desync = high_speed ? current_options[hsio_option_index] : 0;
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[desync] : hsio_opt_to_baud_pal[desync]);
 		desync = 0;
@@ -968,7 +971,11 @@ bool try_get_sio_command() {
 			disk_headers[last_drive].atr_header.temp1 = 0x0;
 		}
 	}
-	if(!r) mutex_exit(&mount_lock);
+try_sio_exit:
+	if(!r)
+		mutex_exit(&mount_lock);
+	else
+		blue_blinks = (high_speed == 1) ? -1 : 0;
 	return r;
 }
 
@@ -1470,7 +1477,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		}
 
 		if(try_get_sio_command()) {
-			if(high_speed == 1) blue_blinks = -1;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
 #ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
@@ -1717,7 +1723,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				mounts[0].status = 0;
 				continue;
 			}
-			if(cas_block_turbo) blue_blinks = -1;
+			blue_blinks = cas_block_turbo ? -1 : 0;
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
@@ -1793,7 +1799,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						mounts[0].mounted = false;
 						mounts[0].rw = BG;
 					}
-				}
+				}else
+					blue_blinks = 0;
 				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
 					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
@@ -1802,7 +1809,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			}
 			mounts[0].rw = BG;
 		}else if(create_new_file > 0) {
-			blue_blinks = 0;
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
 			uint32_t image_size = image_sizes[new_file_size_index];
@@ -1861,7 +1867,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			multicore_lockout_end_blocking();
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
 		}else {
-			blue_blinks = 0;
 			check_and_save_config();
 		}
 	}
