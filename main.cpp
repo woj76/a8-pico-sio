@@ -106,9 +106,8 @@ Button
 const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
 	WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC),
-	// TODO use nice colors
-	GREEN=graphics.create_pen(0,0x80,0),
-	RED=graphics.create_pen(0x80,0,0);
+	GREEN=graphics.create_pen(0x85,0xA0,0),
+	RED=graphics.create_pen(0x96,0x27,0x16);
 
 
 void print_text(const std::string_view &t, int inverse=0) {
@@ -157,33 +156,25 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	return true;
 }
 
-bool repeating_timer_led(struct repeating_timer *t) {
-	uint8_t r = 0;
-	uint8_t g = 0;
-	uint8_t b = 0;
-
-	if(red_blinks == -1)
-		r = 255;
-	else if(red_blinks) {
-		if(!(red_blinks % 2)) r = 255;
-		red_blinks--;
-	}
-	if(green_blinks == -1)
-		g = 255;
-	else if(green_blinks) {
-		if(!(green_blinks % 2)) g = 255;
-		green_blinks--;
-	}
-	if(blue_blinks == -1)
-		b = 255;
-	else if(blue_blinks) {
-		if(!(blue_blinks % 2)) b = 255;
-		blue_blinks--;
-	}
+void update_rgb_led(bool from_interrupt) {
+	uint32_t ints;
+	if(!from_interrupt)
+		ints = save_and_disable_interrupts();
+	uint8_t r = (red_blinks & 1) ? 128 : 0;
+	uint8_t g = (green_blinks & 1) ? 128 : 0;
+	uint8_t b = (blue_blinks & 1) ? 128 : 0;
 	led.set_rgb(r,g,b);
-	return true;
+	if(!from_interrupt)
+		restore_interrupts(ints);
 }
 
+bool repeating_timer_led(struct repeating_timer *t) {
+	if(red_blinks > 0) red_blinks--;
+	if(green_blinks > 0) green_blinks--;
+	if(blue_blinks > 0) blue_blinks--;
+	update_rgb_led(true);
+	return true;
+}
 
 std::string *ptr_str_file_name;
 
@@ -919,31 +910,46 @@ const uint32_t serial_read_timeout = 5000;
 const uint16_t desync_retries = 1;
 //uint8_t no_sio_count = 0;
 
-
 auto_init_mutex(mount_lock);
 
 bool try_get_sio_command() {
+	static int last_drive = -1;
+	static uint16_t desync = 0;
+	bool r = true;
+	int i;
+//	uint framing_errors;
+	memset(&sio_command, 0x01, 5);
+	mutex_enter_blocking(&mount_lock);
 	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
-	static uint16_t desync = 0;
-	static int last_drive = -1;
-	bool r = true;
-	int i=0;
-	mutex_enter_blocking(&mount_lock);
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin)) {
 		r = false;
 		blue_blinks = 0;
+		update_rgb_led(false);
 		goto try_sio_exit;
 	}
-	memset(&sio_command, 0x01, 5);
 	// HiassofT suggests that if bytes == 5 with wrong checksum only or only a single framing error
 	// repeat once without changing the speed
 	// wrong #of bytes, multiple framing errors
 	// continue reading while command line pin is low? When to break this? Let's say after 64?!
 
-	while(i<5 && uart_is_readable_within_us(uart1, serial_read_timeout) && !uart_get_hw(uart1)->rsr)
+	i = 0;
+//	framing_errors = 0;
+	while(!gpio_get(command_line_pin) && i<5 && uart_is_readable_within_us(uart1, serial_read_timeout) && !uart_get_hw(uart1)->rsr)
 		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
+
+//	while(!gpio_get(command_line_pin) && uart_is_readable_within_us(uart1, serial_read_timeout)) {
+//		uint8_t c = (uint8_t)uart_get_hw(uart1)->dr;
+//		if(uart_get_hw(uart1)->rsr) {
+//			framing_errors++;
+//			hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
+//		}
+//		if(i < 5)
+//			((uint8_t *)&sio_command)[i++] = c;
+//	}
+
+
 	if(gpio_get(command_line_pin) || uart_get_hw(uart1)->rsr || i != 5 ||
 			sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || sio_command.command_id < 0x21) {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
@@ -956,12 +962,14 @@ bool try_get_sio_command() {
 		desync = 0;
 	if(!desync && (sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted))
 		r = false;
-	if(high_speed >= 0 && desync == desync_retries && current_options[hsio_option_index]) {
+	if(high_speed > 0 && desync >= desync_retries && current_options[hsio_option_index]) {
+		// TODO if indeed this should be for high_speed > 0 only the following can be simplified
+		// but why????
 		high_speed ^= 1;
-		desync = high_speed ? current_options[hsio_option_index] : 0;
-		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[desync] : hsio_opt_to_baud_pal[desync]);
-		desync = 0;
-	}else if(!desync) {
+		uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
+		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
+	}
+	if(!desync) {
 		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
 		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 			tight_loop_contents();
@@ -974,8 +982,10 @@ bool try_get_sio_command() {
 try_sio_exit:
 	if(!r)
 		mutex_exit(&mount_lock);
-	else
+	else {
 		blue_blinks = (high_speed == 1) ? -1 : 0;
+		update_rgb_led(false);
+	}
 	return r;
 }
 
@@ -1471,9 +1481,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			mutex_exit(&fs_lock);
 			if(i) mutex_exit(&mount_lock);
 			if(mounts[i].mounted)
-				if(green_blinks != -1) green_blinks += 4;
+				green_blinks += 4;
 			else
-				if(red_blinks != -1) red_blinks += 4;
+				red_blinks += 4;
 		}
 
 		if(try_get_sio_command()) {
@@ -1705,7 +1715,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				uart_tx_wait_blocking(uart1);
 				if(sio_command.command_id == '?') {
 					high_speed = 1;
-					// led.set_rgb(0,255,0);
 					r = current_options[hsio_option_index];
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
 				}
@@ -1724,6 +1733,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				continue;
 			}
 			blue_blinks = cas_block_turbo ? -1 : 0;
+			update_rgb_led(false);
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
@@ -1799,8 +1809,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						mounts[0].mounted = false;
 						mounts[0].rw = BG;
 					}
-				}else
+				}else {
 					blue_blinks = 0;
+					update_rgb_led(false);
+				}
 				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
 					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
@@ -2807,21 +2819,36 @@ int main() {
 		graphics.rectangle(rt);
 		print_text(txt_buf);
 */
+// )*+,  O
+// -./0  X
+
 		for(int i=0; i<5; i++) {
 			d = mount_to_menu[i];
 			Pen pp;
 			if(!mounts[i].mounted)
-				pp = WHITE;
+				pp = RED;
 			else
 				pp = mounts[i].rw;
 			graphics.set_pen(BG);
-			Rect rr(menu_entries[d].x-8*font_scale,menu_entries[d].y,8*font_scale,8*font_scale);
+			text_location.x = menu_entries[d].x-12*font_scale;
+			text_location.y = menu_entries[d].y;
+			Rect rr(text_location.x,text_location.y,8*font_scale,8*font_scale);
 			graphics.rectangle(rr);
 			graphics.set_pen(pp);
-			graphics.rectangle(rr);
+
+			graphics.set_font(&symbol_font);
+			graphics.text(mounts[i].mounted ? ")" : "-", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x += 8;
+			graphics.text(mounts[i].mounted ? "*" : ".", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x -= 8;
+			text_location.y += 8;
+			graphics.text(mounts[i].mounted ? "+" : "/", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x += 8;
+			graphics.text(mounts[i].mounted ? "," : "0", text_location, st7789.width, 1, 0.0, 0, true);
+			graphics.set_font(&atari_font);
 		}
 		st7789.update(&graphics);
-		sleep_ms(20);
+		sleep_ms(20); // TODO 16?
 	}
 	return 0;
 }
