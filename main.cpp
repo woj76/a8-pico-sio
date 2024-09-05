@@ -890,6 +890,7 @@ typedef struct __attribute__((__packed__)) {
 	uint8_t command_id;
 	uint16_t sector_number;
 	uint8_t checksum;
+	uint8_t temp;
 } sio_command_type;
 
 sio_command_type sio_command;
@@ -907,47 +908,51 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 }
 
 const uint32_t serial_read_timeout = 5000;
-const uint16_t desync_retries = 1;
-//uint8_t no_sio_count = 0;
 
 auto_init_mutex(mount_lock);
 
-bool try_get_sio_command() {
-	static int last_drive = -1;
+// volatile int last_drive = 0;
+volatile bool sio_command_received = false;
+
+// TEST Popeye + RESET
+// TEST PoP + RESET
+// TEST U1MB multiple disks, (a) HSIO 2+2, (b) HSIO off
+// TEST Misja ATX
+
+void try_get_sio_command(uint gpio, uint32_t event_mask) {
+	if(gpio != command_line_pin || !(event_mask & GPIO_IRQ_EDGE_FALL))
+		return;
+	sio_command_received = false;
 	static uint16_t desync = 0;
+	static uint16_t freshly_changed = 0;
 	bool r = true;
-	int i;
-//	uint framing_errors;
-	memset(&sio_command, 0x01, 5);
-	mutex_enter_blocking(&mount_lock);
+	int i = 0;
+
 	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
-	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin)) {
-		r = false;
-		blue_blinks = 0;
-		update_rgb_led(false);
-		goto try_sio_exit;
-	}
+	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
+		return;
+
+	// TODO now
+	// TODO add sleep?
+	//if(gpio_get(normal_motor_pin))
+	//		return;
+
+	memset(&sio_command, 0x01, 6);
+//	mutex_enter_blocking(&mount_lock);
 	// HiassofT suggests that if bytes == 5 with wrong checksum only or only a single framing error
 	// repeat once without changing the speed
 	// wrong #of bytes, multiple framing errors
 	// continue reading while command line pin is low? When to break this? Let's say after 64?!
 
-	i = 0;
-//	framing_errors = 0;
 	while(!gpio_get(command_line_pin) && i<5 && uart_is_readable_within_us(uart1, serial_read_timeout) && !uart_get_hw(uart1)->rsr)
 		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
 
-//	while(!gpio_get(command_line_pin) && uart_is_readable_within_us(uart1, serial_read_timeout)) {
-//		uint8_t c = (uint8_t)uart_get_hw(uart1)->dr;
-//		if(uart_get_hw(uart1)->rsr) {
-//			framing_errors++;
-//			hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
-//		}
-//		if(i < 5)
-//			((uint8_t *)&sio_command)[i++] = c;
-//	}
+	//while(!gpio_get(command_line_pin) && uart_is_readable(uart1))
+	//	((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
+	//if(!gpio_get(command_line_pin) && uart_is_readable(uart1))
+	//	((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
 
 
 	if(gpio_get(command_line_pin) || uart_get_hw(uart1)->rsr || i != 5 ||
@@ -955,21 +960,90 @@ bool try_get_sio_command() {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
 		desync++;
-		if(last_drive >= 0) {
-			disk_headers[last_drive].atr_header.temp1 |= 0x01;
-		}
+		//if(last_drive)
+		//	disk_headers[last_drive-1].atr_header.temp1 |= 0x01;
 	} else
 		desync = 0;
-	if(!desync && (sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted))
+
+	if(desync) {
+		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) { // TODO now
+			// TODO if high_speed > 0 indeed, this can be simplified
+			high_speed ^= 1;
+			freshly_changed = 2;
+			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
+			// TODO Here clean up the buffer?
+			uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
+			desync = 0;
+		}else if(freshly_changed)
+			freshly_changed--;
+	}else{
+		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
+		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
+			tight_loop_contents();
+		if(!gpio_get(command_line_pin)) {
+			r = false;
+			desync = 1;
+		}else
+			freshly_changed = 0;
+	}
+
+//	if(!r)
+//		mutex_exit(&mount_lock);
+	sio_command_received = r;
+}
+
+/*
+bool try_get_sio_command2() {
+	static int last_drive = -1;
+	static uint16_t desync = 0;
+	bool r = true;
+	int i=0;
+	uint framing_errors=0;
+	memset(&sio_command, 0x01, 6);
+
+	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin)) {
+		blue_blinks = 0;
+		update_rgb_led(false);
+		return false;
+	}
+	mutex_enter_blocking(&mount_lock);
+
+	while(!gpio_get(command_line_pin) && i<5 && uart_is_readable_within_us(uart1, serial_read_timeout)) {
+		if(uart_get_hw(uart1)->rsr) {
+			framing_errors++;
+			hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
+		}
+		if(framing_errors > 1)
+			break;
+		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
+	}
+
+
+	while(!gpio_get(command_line_pin) && uart_is_readable(uart1)) {
+		((uint8_t *)&sio_command)[i == 6 ? 5 : i] = (uint8_t)uart_get_hw(uart1)->dr;
+		if(i == 5) i = 6;
+	}
+
+	if(gpio_get(command_line_pin) || framing_errors > 1 || i != 5)
+		desync = 2;
+	else if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || framing_errors)
+		desync++;
+	else
+		desync = 0;
+
+	if(desync) {
 		r = false;
-	if(high_speed > 0 && desync >= desync_retries && current_options[hsio_option_index]) {
-		// TODO if indeed this should be for high_speed > 0 only the following can be simplified
-		// but why????
+		if(last_drive >= 0)
+			disk_headers[last_drive].atr_header.temp1 |= 0x01;
+	}else if(sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted)
+		r = false;
+
+	if(current_options[hsio_option_index] && high_speed >= 0 && desync >= 2) {
 		high_speed ^= 1;
 		uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
 		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
-	}
-	if(!desync) {
+		desync = 0;
+	} else if(!desync) {
 		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
 		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 			tight_loop_contents();
@@ -977,26 +1051,20 @@ bool try_get_sio_command() {
 		if(r) {
 			last_drive = sio_command.device_id-0x31;
 			disk_headers[last_drive].atr_header.temp1 = 0x0;
-		}
+			blue_blinks = (high_speed == 1) ? -1 : 0;
+			update_rgb_led(false);
+		}else
+			desync = 1; // TODO ???
 	}
-try_sio_exit:
+
 	if(!r)
 		mutex_exit(&mount_lock);
-	else {
-		blue_blinks = (high_speed == 1) ? -1 : 0;
-		update_rgb_led(false);
-	}
 	return r;
 }
+*/
 
 uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool op_write=false) {
-/*
-	// TODO not needed?
-	if(!mounts[drive_number].mounted) {
-		disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
-		return 'N';
-	}
-*/
+
 	if(op_write && (disk_headers[drive_number-1].atr_header.flags & 0x1)) {
 		disk_headers[drive_number-1].atr_header.temp2 &= 0xBF;
 		return 'N';
@@ -1047,7 +1115,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 		if(op_write) {
 			multicore_lockout_start_blocking();
 			f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
-			// f_op_stat = f_sync(&fil);
+			f_op_stat = f_sync(&fil);
 			multicore_lockout_end_blocking();
 		} else {
 			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
@@ -1159,9 +1227,11 @@ uint16_t getCurrentHeadPosition() {
 
 void waitForAngularPosition(uint16_t pos) {
 	// Alternative 1
+
 	while(getCurrentHeadPosition() != pos)
 		tight_loop_contents();
-	// Alternative 2
+
+	// TODO Alternative 2
 /*
 	int32_t to_wait = pos - getCurrentHeadPosition();
 	if(to_wait < 0)
@@ -1293,7 +1363,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
 							// TODO shouldn't this have a break
-							break;
+							//   break;
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
@@ -1486,16 +1556,26 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				red_blinks += 4;
 		}
 
-		if(try_get_sio_command()) {
+		// TODO now
+		try_get_sio_command(command_line_pin, GPIO_IRQ_EDGE_FALL);
+		if(sio_command_received) {
+			sio_command_received = false;
+			int drive_number = sio_command.device_id-0x30;
+			mutex_enter_blocking(&mount_lock);
+			uint8_t r = 'A';
+			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted)
+				goto ignore_sio_command_frame;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
 #ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 #endif
 			memset(sector_buffer, 0, sector_buffer_size);
-			int drive_number = sio_command.device_id-0x30;
+			blue_blinks = (high_speed == 1) ? -1 : 0;
+			update_rgb_led(false);
+			// last_drive = drive_number;
+			disk_headers[drive_number-1].atr_header.temp1 = 0x0;
 			f_op_stat = FR_OK;
 			to_read = 0;
-			uint8_t r = 'A';
 			switch(sio_command.command_id) {
 				case 'S': // get status
 					uart_putc_raw(uart1, r);
@@ -1720,6 +1800,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 			}
 			mounts[drive_number].rw = BG;
+ignore_sio_command_frame:
+			blue_blinks = 0;
+			update_rgb_led(false);
 			mutex_exit(&mount_lock);
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
@@ -1890,7 +1973,9 @@ void core1_entry() {
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
-	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN); gpio_pull_down(normal_motor_pin);
+	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN);
+	// Pico2 bug warning: Try without this pull down, otherwise use 10K+ pull down outside
+	gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
 	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
@@ -1917,7 +2002,8 @@ void core1_entry() {
 	irq_set_enabled(DMA_IRQ_0, true);
 
 	// Pico 2 does not like the "full" 0x80000000 for transfer counter, the core freezes!
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
+	// dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
@@ -1968,10 +2054,10 @@ void core1_entry() {
 	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 	gpio_set_function(sio_rx_pin, GPIO_FUNC_UART);
 	uart_set_hw_flow(uart1, false, false);
-	uart_set_fifo_enabled(uart1, true);
+	uart_set_fifo_enabled(uart1, false); // TODO now
 	uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 #endif
-
+	/// gpio_set_irq_enabled_with_callback(command_line_pin, GPIO_IRQ_EDGE_FALL, true, try_get_sio_command); // TODO now
 	main_sio_loop(sm, sm_turbo);
 }
 
@@ -2454,7 +2540,7 @@ void get_file(int file_entry_index) {
 						strcpy(&curr_path[i], f);
 						break;
 					} else {
-						strcpy(&curr_path[0], f);
+						strcpy(&curr_path[i], f);
 						if(!mount_file(f, file_entry_index))
 							red_blinks = 6;
 						curr_path[i] = 0;
@@ -2819,8 +2905,6 @@ int main() {
 		graphics.rectangle(rt);
 		print_text(txt_buf);
 */
-// )*+,  O
-// -./0  X
 
 		for(int i=0; i<5; i++) {
 			d = mount_to_menu[i];
