@@ -912,18 +912,18 @@ const uint32_t serial_read_timeout = 5000;
 auto_init_mutex(mount_lock);
 
 // volatile int last_drive = 0;
-volatile bool sio_command_received = false;
+// volatile bool sio_command_received = false;
 
 // TEST Popeye + RESET
 // TEST PoP + RESET
 // TEST U1MB multiple disks, (a) HSIO 2+2, (b) HSIO off
 // TEST Misja ATX
 
-void try_get_sio_command(uint gpio, uint32_t event_mask) {
-	if(gpio != command_line_pin || !(event_mask & GPIO_IRQ_EDGE_FALL))
-		return;
-	sio_command_received = false;
-	static uint16_t desync = 0;
+bool try_get_sio_command(uint gpio, uint32_t event_mask) {
+	//if(gpio != command_line_pin || !(event_mask & GPIO_IRQ_EDGE_FALL))
+	//	return false;
+	// sio_command_received = false;
+	// static uint16_t desync = 0;
 	static uint16_t freshly_changed = 0;
 	bool r = true;
 	int i = 0;
@@ -932,15 +932,14 @@ void try_get_sio_command(uint gpio, uint32_t event_mask) {
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
-		return;
+		return false;
 
-	// TODO now
 	// TODO add sleep?
 	//if(gpio_get(normal_motor_pin))
 	//		return;
 
 	memset(&sio_command, 0x01, 6);
-//	mutex_enter_blocking(&mount_lock);
+
 	// HiassofT suggests that if bytes == 5 with wrong checksum only or only a single framing error
 	// repeat once without changing the speed
 	// wrong #of bytes, multiple framing errors
@@ -954,42 +953,34 @@ void try_get_sio_command(uint gpio, uint32_t event_mask) {
 	//if(!gpio_get(command_line_pin) && uart_is_readable(uart1))
 	//	((uint8_t *)&sio_command)[i] = (uint8_t)uart_get_hw(uart1)->dr;
 
-
 	if(gpio_get(command_line_pin) || uart_get_hw(uart1)->rsr || i != 5 ||
 			sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || sio_command.command_id < 0x21) {
 		hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
 		r = false;
-		desync++;
-		//if(last_drive)
-		//	disk_headers[last_drive-1].atr_header.temp1 |= 0x01;
-	} else
-		desync = 0;
+	}
 
-	if(desync) {
-		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) { // TODO now
-			// TODO if high_speed > 0 indeed, this can be simplified
-			high_speed ^= 1;
-			freshly_changed = 2;
-			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
-			// TODO Here clean up the buffer?
-			uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
-			desync = 0;
-		}else if(freshly_changed)
-			freshly_changed--;
-	}else{
+	if(r /*desync*/) {
 		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
 		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 			tight_loop_contents();
-		if(!gpio_get(command_line_pin)) {
+		if(!gpio_get(command_line_pin))
 			r = false;
-			desync = 1;
-		}else
+			// desync = 1;
+		else
 			freshly_changed = 0;
+	}else{
+		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) { // TODO now
+			high_speed ^= 1;
+			freshly_changed = 2;
+			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
+			uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
+			// desync = 0;
+		}else if(freshly_changed)
+			freshly_changed--;
 	}
 
-//	if(!r)
-//		mutex_exit(&mount_lock);
-	sio_command_received = r;
+	// sio_command_received = r;
+	return r;
 }
 
 /*
@@ -1557,9 +1548,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 		}
 
 		// TODO now
-		try_get_sio_command(command_line_pin, GPIO_IRQ_EDGE_FALL);
-		if(sio_command_received) {
-			sio_command_received = false;
+		if(try_get_sio_command(command_line_pin, GPIO_IRQ_EDGE_FALL)) {
+			//sio_command_received = false;
 			int drive_number = sio_command.device_id-0x30;
 			mutex_enter_blocking(&mount_lock);
 			uint8_t r = 'A';
@@ -1974,6 +1964,9 @@ void core1_entry() {
 
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN);
+	// gpio_init(25);
+	// gpio_set_dir(25, GPIO_OUT);
+	// gpio_put(25, 1);
 	// Pico2 bug warning: Try without this pull down, otherwise use 10K+ pull down outside
 	gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
@@ -1983,8 +1976,11 @@ void core1_entry() {
 	uint disk_pio_offset = pio_add_program(disk_pio, &disk_counter_program);
 	float disk_clk_divider = (float)clock_get_hz(clk_sys)/1000000;
 	uint disk_sm = pio_claim_unused_sm(disk_pio, true);
+	//pio_gpio_init(disk_pio, 25);
 	pio_sm_config disk_sm_config = pin_io_program_get_default_config(disk_pio_offset);
 	sm_config_set_clkdiv(&disk_sm_config, disk_clk_divider);
+	//sm_config_set_out_pins(&disk_sm_config, 25, 1);
+	//sm_config_set_sideset_pins(&disk_sm_config, 25);
 	sm_config_set_in_shift(&disk_sm_config, true, false, 32);
 	sm_config_set_out_shift(&disk_sm_config, true, true, 32);
 	pio_sm_init(disk_pio, disk_sm, disk_pio_offset, &disk_sm_config);
@@ -2002,8 +1998,8 @@ void core1_entry() {
 	irq_set_enabled(DMA_IRQ_0, true);
 
 	// Pico 2 does not like the "full" 0x80000000 for transfer counter, the core freezes!
-	// dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
+	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
+	//dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
