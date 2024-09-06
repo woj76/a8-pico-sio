@@ -1361,7 +1361,8 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			}
 			// if the sector status is bad, delay for a full disk rotation
 			if (*status) {
-				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation));
+				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
+				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
 			}else
 				retries = 0;
 		}
@@ -1399,7 +1400,12 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		uint16_t rotationDelay = (gLastAngle[atx_drive_number] > headPosition) ? (gLastAngle[atx_drive_number] - headPosition) : (au_full_rotation - headPosition + gLastAngle[atx_drive_number]);
 		// rotationDelay is max one full rotation + a fraction
 		uint16_t au_one_sector_read = au_full_rotation / sectorCount;
-
+		//uint16_t rotationDelay2 = rotationDelay / 2;
+		//uint16_t s1 = incAngularDisplacement(headPosition, rotationDelay2);
+		//uint16_t s2 = incAngularDisplacement(s1, rotationDelay-rotationDelay2);
+		//waitForAngularPosition(s1);
+		//waitForAngularPosition(s2);
+		//waitForAngularPosition(incAngularDisplacement(s2, au_one_sector_read));
 		waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
 		sleep_ms(ms_crc_calculation);
 	}
@@ -2380,13 +2386,11 @@ void get_file(int file_entry_index) {
 
 	while(true) {
 		//loading_pg.init();
-
 		int32_t r = read_directory(-1, 0);
 		if(r < 0 && curr_path[0]) {
 			curr_path[0] = 0;
 			r = read_directory(-1, 0);
 		}
-
 		graphics.set_pen(BG); graphics.clear();
 		if(r < 0) {
 			text_location.x = str_x(str_no_media.length());
@@ -2417,14 +2421,14 @@ void get_file(int file_entry_index) {
 		if(num_files || shift_index)
 			update_display_files(page_index, page_index ? 0 : shift_index);
 		int y1 = main_buttons[2].y+10*font_scale, y2 = main_buttons[3].y-2*font_scale;
-		int scroll_block_len = (y2-y1) / num_pages;
+		int scroll_block_len = (y2-y1) / (num_pages ? num_pages : 1);
 		Rect scroll_bar(st7789.width - 7*font_scale, y1, 4*font_scale, y2-y1);
 		graphics.set_pen(BG); graphics.rectangle(scroll_bar);
 		scroll_bar.h = scroll_block_len;
 		graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
 		st7789.update(&graphics);
 		while(true) {
-			if(button_y.read()) {
+			if(num_pages && button_y.read()) {
 				if(cursor_position < num_files_page-1 || page_index < num_pages-1) {
 					if(cursor_position == files_per_page-1 && page_index < num_pages-1) {
 						cursor_prev = -1;
@@ -2443,7 +2447,7 @@ void get_file(int file_entry_index) {
 					update_display_files(page_index, page_index ? 0 : shift_index);
 					st7789.update(&graphics);
 				}
-			}else if(button_x.read()) {
+			}else if(num_pages && button_x.read()) {
 				if(cursor_position > 0 || page_index > 0) {
 					if(cursor_position == 0 && page_index > 0) {
 						cursor_prev = -1;
@@ -2462,7 +2466,7 @@ void get_file(int file_entry_index) {
 					update_display_files(page_index, page_index ? 0 : shift_index);
 					st7789.update(&graphics);
 				}
-			}else if(button_a.read()) {
+			}else if(num_pages && button_a.read()) {
 				int fi = cursor_position - (page_index ? 0 : shift_index);
 				int i = strlen(curr_path);
 				delete scroll_ptr; scroll_ptr = nullptr;
@@ -2905,33 +2909,33 @@ int main() {
 		print_text(txt_buf);
 */
 
-		for(int i=0; i<5; i++) {
-			d = mount_to_menu[i];
-			Pen pp;
-			if(!mounts[i].mounted)
-				pp = RED;
-			else
-				pp = mounts[i].rw;
-			graphics.set_pen(BG);
-			text_location.x = menu_entries[d].x-12*font_scale;
-			text_location.y = menu_entries[d].y;
-			Rect rr(text_location.x,text_location.y,8*font_scale,8*font_scale);
-			graphics.rectangle(rr);
-			graphics.set_pen(pp);
+		graphics.set_font(&symbol_font);
+		//for(int rpt=0; rpt < 2; rpt++) {
+			for(int i=0; i<5; i++) {
+				d = mount_to_menu[i];
 
-			graphics.set_font(&symbol_font);
-			graphics.text(mounts[i].mounted ? ")" : "-", text_location, st7789.width, 1, 0.0, 0, true);
-			text_location.x += 8;
-			graphics.text(mounts[i].mounted ? "*" : ".", text_location, st7789.width, 1, 0.0, 0, true);
-			text_location.x -= 8;
-			text_location.y += 8;
-			graphics.text(mounts[i].mounted ? "+" : "/", text_location, st7789.width, 1, 0.0, 0, true);
-			text_location.x += 8;
-			graphics.text(mounts[i].mounted ? "," : "0", text_location, st7789.width, 1, 0.0, 0, true);
-			graphics.set_font(&atari_font);
-		}
-		st7789.update(&graphics);
-		sleep_ms(20); // TODO 16?
+				text_location.x = menu_entries[d].x-10*font_scale;
+				text_location.y = menu_entries[d].y;
+				graphics.set_pen(BG);
+				Rect rr(text_location.x,text_location.y,8*font_scale,8*font_scale);
+				graphics.rectangle(rr);
+
+				bool mntd = mounts[i].mounted;
+
+				graphics.set_pen(mntd ? mounts[i].rw : RED);
+				graphics.text(mntd ? ")" : "-", text_location, st7789.width, 1, 0.0, 0, true);
+				text_location.x += 8;
+				graphics.text(mntd ? "*" : ".", text_location, st7789.width, 1, 0.0, 0, true);
+				text_location.x -= 8;
+				text_location.y += 8;
+				graphics.text(mntd ? "+" : "/", text_location, st7789.width, 1, 0.0, 0, true);
+				text_location.x += 8;
+				graphics.text(mntd ? "," : "0", text_location, st7789.width, 1, 0.0, 0, true);
+			}
+			st7789.update(&graphics);
+			sleep_ms(20);
+		//}
+		graphics.set_font(&atari_font);
 	}
 	return 0;
 }
