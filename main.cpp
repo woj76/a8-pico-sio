@@ -539,11 +539,12 @@ std::string str_cas = "C:  <EMPTY>   ";
 const std::string str_about = "About...";
 
 const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
+
 const file_type menu_to_type[] = {
 	file_type::none,
 	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
 	file_type::none, file_type::none,
-	file_type::casette
+	file_type::casette, file_type::none
 };
 
 typedef struct {
@@ -1201,7 +1202,7 @@ const uint8_t mask_extended_data = 0x40; // mask for checking FDC status extende
 const uint8_t mask_reserved = 0x80;
 
 uint8_t atx_track_size[4]; // number of sectors in each track
-uint32_t gTrackInfo[4][max_track]; // pre-calculated info for each track
+uint32_t gTrackInfo[4][max_track] = {0}; // pre-calculated info for each track
 uint16_t gLastAngle[4];
 uint8_t gCurrentHeadTrack[4] = {0};
 
@@ -1212,7 +1213,7 @@ uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
 	return ret;
 }
 
-uint16_t getCurrentHeadPosition() {
+uint16_t getCurrentHeadPosition() { // 1..26042
 	return (uint16_t)(au_full_rotation-disk_counter);
 }
 
@@ -1353,17 +1354,15 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 								extendedDataRecords++;
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
-							// TODO shouldn't this have a break
-							//   break;
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
 				}
 			}
 			// if the sector status is bad, delay for a full disk rotation
-			if (*status)
+			if (*status) {
 				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation));
-			else
+			}else
 				retries = 0;
 		}
 
@@ -1398,7 +1397,9 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 				sector_buffer[i] = (uint8_t) get_rand_32();
 
 		uint16_t rotationDelay = (gLastAngle[atx_drive_number] > headPosition) ? (gLastAngle[atx_drive_number] - headPosition) : (au_full_rotation - headPosition + gLastAngle[atx_drive_number]);
+		// rotationDelay is max one full rotation + a fraction
 		uint16_t au_one_sector_read = au_full_rotation / sectorCount;
+
 		waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
 		sleep_ms(ms_crc_calculation);
 	}
@@ -1968,7 +1969,7 @@ void core1_entry() {
 	// gpio_set_dir(25, GPIO_OUT);
 	// gpio_put(25, 1);
 	// Pico2 bug warning: Try without this pull down, otherwise use 10K+ pull down outside
-	gpio_pull_down(normal_motor_pin);
+	// gpio_pull_down(normal_motor_pin);
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
 	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
@@ -1999,7 +2000,8 @@ void core1_entry() {
 
 	// Pico 2 does not like the "full" 0x80000000 for transfer counter, the core freezes!
 	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
-	//dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
+	// dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
+
 	disk_pio->txf[disk_sm] = (au_full_rotation-1);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
@@ -2032,7 +2034,7 @@ void core1_entry() {
 	channel_config_set_read_increment(&dma_c, false);
 	channel_config_set_dreq(&dma_c, pio_get_dreq(cas_pio, sm, true));
 	dma_channel_configure(dma_channel, &dma_c, &cas_pio->txf[sm], &pio_e, 1, false);
-	dma_channel_set_irq0_enabled(dma_channel, true);
+	dma_channel_set_irq1_enabled(dma_channel, true);
 
 	dma_channel_turbo = dma_claim_unused_channel(true);
 	dma_channel_config dma_c1 = dma_channel_get_default_config(dma_channel_turbo);
@@ -2405,12 +2407,13 @@ void get_file(int file_entry_index) {
 			text_location.y = 7*8*font_scale;
 			print_text(str_no_files, str_no_files.length());
 		}
-
 		int num_pages = (num_files+shift_index+files_per_page-1) / files_per_page;
 		int last_page = (num_files+shift_index) % files_per_page;
+		if(!last_page)
+			last_page = files_per_page;
 		num_files_page = (page_index == num_pages-1) ? last_page : files_per_page;
 		if(num_files)
-			read_directory(page_index, page_index ? num_files_page : num_files_page-shift_index);
+			read_directory(page_index, page_index ? num_files_page : (num_files_page-shift_index));
 		if(num_files || shift_index)
 			update_display_files(page_index, page_index ? 0 : shift_index);
 		int y1 = main_buttons[2].y+10*font_scale, y2 = main_buttons[3].y-2*font_scale;
