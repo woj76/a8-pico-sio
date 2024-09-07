@@ -1294,8 +1294,9 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		if (diff < 0)
 			diff = -diff;
 		// wait for each track (this is done in a loop since _delay_ms needs a compile-time constant)
-		for (i = 0; i < diff; i++)
-			sleep_us(is1050 ? us_track_step_1050 : us_track_step_810);
+		//for (i = 0; i < diff; i++)
+		//	sleep_us(is1050 ? us_track_step_1050 : us_track_step_810);
+		sleep_us(diff*(is1050 ? us_track_step_1050 : us_track_step_810));
 		// delay for head settling
 		if(is1050)
 			sleep_ms(ms_head_settle_1050);
@@ -1348,12 +1349,12 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 							pTT = tt;
 							gLastAngle[atx_drive_number] = sectorHeader->timev;
 							*status = sectorHeader->status;
-							if (*status & mask_fdc_dlost)
-								*status |= 0x02;
+
 							if (*status & mask_extended_data)
 								extendedDataRecords++;
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
+							// TODO break?
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
@@ -1385,9 +1386,18 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 					currentFileOffset += extSectorData->size;
 				}
 			} while (extSectorData->size > 0);
-			//clear extended flag, it is similar to write protect in DVSTAT[1]
 			*status &= ~mask_extended_data;
 		}
+		if (*status & mask_fdc_dlost) {
+			if(is1050)
+				*status |= 0x02;
+			else {
+				*status &= 0xF3;
+				*status |= 0x01;
+			}
+		}
+		if(!is1050 && (*status & 0x20))
+			*status |= 0x40;
 
 		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && !hasError)
 			r = true;
@@ -1406,7 +1416,12 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		//waitForAngularPosition(s1);
 		//waitForAngularPosition(s2);
 		//waitForAngularPosition(incAngularDisplacement(s2, au_one_sector_read));
-		waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
+		rotationDelay += au_one_sector_read;
+		uint16_t rd = rotationDelay/2;
+		waitForAngularPosition(incAngularDisplacement(headPosition, rd));
+		waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), rotationDelay-rd));
+
+		//waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
 		sleep_ms(ms_crc_calculation);
 	}
 
@@ -1626,7 +1641,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
 							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read , false)) != FR_OK)
-								// ~0x10 record not found? Should this even be reported?
 								disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 							else
 								disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
@@ -1698,12 +1712,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							}
 							break;
 						case disk_type_atx:
+							if(sio_command.sector_number == 0 || sio_command.sector_number > 40*atx_track_size[drive_number-1]) {
+								disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
+								r = 'N';
+							}
 							uart_putc_raw(uart1, r);
-							// TODO when does the request time go in? Is this correct as it is now?
+							if (r == 'N')
+								break;
 							to_read = disk_headers[drive_number-1].atr_header.sec_size;
 							if(!loadAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
 								f_op_stat = FR_INT_ERR;
-							break;
 						default:
 							break;
 					}
