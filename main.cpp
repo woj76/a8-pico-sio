@@ -1202,19 +1202,20 @@ const uint8_t mask_extended_data = 0x40; // mask for checking FDC status extende
 const uint8_t mask_reserved = 0x80;
 
 uint8_t atx_track_size[4]; // number of sectors in each track
-uint32_t gTrackInfo[4][max_track] = {0}; // pre-calculated info for each track
+uint8_t atx_density[4];
+uint32_t gTrackInfo[4][max_track]; // pre-calculated info for each track
 uint16_t gLastAngle[4];
-uint8_t gCurrentHeadTrack[4] = {0};
+uint8_t gCurrentHeadTrack[4];
 
 uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
 	uint16_t ret = start + delta;
-	if (ret > au_full_rotation)
+	if (ret >= au_full_rotation)
 		ret -= au_full_rotation;
 	return ret;
 }
 
-uint16_t getCurrentHeadPosition() { // 1..26042
-	return (uint16_t)(au_full_rotation-disk_counter);
+uint16_t getCurrentHeadPosition() {
+	return (uint16_t)(au_full_rotation-disk_counter-1);
 }
 
 void waitForAngularPosition(uint16_t pos) {
@@ -1245,6 +1246,7 @@ bool loadAtxFile(FIL *fil, int atx_drive_number) {
 	if (fileHeader->version != atx_version || fileHeader->minVersion != atx_version)
 		return false;
 
+	atx_density[atx_drive_number] = fileHeader->density;
 	atx_track_size[atx_drive_number] = (fileHeader->density == atx_medium) ? 26 : 18;
 	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
 
@@ -1284,9 +1286,6 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	// set initial status (in case the target sector is not found)
 	*status = 0x10;
 
-	// delay for the time the drive takes to process the request
-	sleep_us(us_drive_request_delay);
-
 	// delay for track stepping if needed
 	if (gCurrentHeadTrack[atx_drive_number] != tgtTrackNumber) {
 		int8_t diff;
@@ -1309,7 +1308,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	uint16_t headPosition = getCurrentHeadPosition();
 
 	// read the track header
-	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1];
+	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber-1];
 	uint16_t sectorCount;
 	// exit, if track not present
 	if (!currentFileOffset || mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackHeader), false) != FR_OK)
@@ -1337,6 +1336,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			retries--;
 			currentFileOffset = retryOffset;
 			// iterate through all sector headers to find the target sector
+			if(atx_density[atx_drive_number] == (trackHeader->flags & 0x2) ? atx_medium : atx_single)
 			for (i=0; i < sectorCount; i++) {
 				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
 					sectorHeader = (struct atxSectorHeader *)sector_buffer;
@@ -1350,11 +1350,13 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 							gLastAngle[atx_drive_number] = sectorHeader->timev;
 							*status = sectorHeader->status;
 
+							//if (*status & mask_fdc_dlost)
+							//	*status |= 0x02;
+
 							if (*status & mask_extended_data)
 								extendedDataRecords++;
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
-							// TODO break?
 						}
 					}
 					currentFileOffset += sizeof(struct atxSectorHeader);
@@ -1364,8 +1366,9 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			if (*status) {
 				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
 				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
-			}else
+			}else {
 				retries = 0;
+			}
 		}
 
 		// ignore the reserved bit
@@ -1388,6 +1391,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			} while (extSectorData->size > 0);
 			*status &= ~mask_extended_data;
 		}
+
 		if (*status & mask_fdc_dlost) {
 			if(is1050)
 				*status |= 0x02;
@@ -1399,8 +1403,10 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		if(!is1050 && (*status & 0x20))
 			*status |= 0x40;
 
-		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && !hasError)
+		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK)
 			r = true;
+		if(hasError)
+			r = false;
 
 		// if a weak offset is defined, randomize the appropriate data
 		if (weakOffset > -1)
@@ -1408,14 +1414,8 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 				sector_buffer[i] = (uint8_t) get_rand_32();
 
 		uint16_t rotationDelay = (gLastAngle[atx_drive_number] > headPosition) ? (gLastAngle[atx_drive_number] - headPosition) : (au_full_rotation - headPosition + gLastAngle[atx_drive_number]);
-		// rotationDelay is max one full rotation + a fraction
 		uint16_t au_one_sector_read = au_full_rotation / sectorCount;
-		//uint16_t rotationDelay2 = rotationDelay / 2;
-		//uint16_t s1 = incAngularDisplacement(headPosition, rotationDelay2);
-		//uint16_t s2 = incAngularDisplacement(s1, rotationDelay-rotationDelay2);
-		//waitForAngularPosition(s1);
-		//waitForAngularPosition(s2);
-		//waitForAngularPosition(incAngularDisplacement(s2, au_one_sector_read));
+
 		rotationDelay += au_one_sector_read;
 		uint16_t rd = rotationDelay/2;
 		waitForAngularPosition(incAngularDisplacement(headPosition, rd));
@@ -1712,6 +1712,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							}
 							break;
 						case disk_type_atx:
+							// delay for the time the drive takes to process the request
+							sleep_us(us_drive_request_delay);
 							if(sio_command.sector_number == 0 || sio_command.sector_number > 40*atx_track_size[drive_number-1]) {
 								disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 								r = 'N';
@@ -2916,9 +2918,10 @@ int main() {
 			last_cas_offset = s;
 		}
 		update_main_menu_buttons();
+
 /*
 		char txt_buf[20];
-		sprintf(txt_buf, " %d ", disk_counter);
+		sprintf(txt_buf, " %06d %02X %02X %02X", sampledHeadPosition, disk_headers[0].atr_header.temp2, sector_buffer[0], sector_buffer[88]);
 		text_location.x = 0;
 		text_location.y = 0;
 		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*8);
