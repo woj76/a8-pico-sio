@@ -1189,9 +1189,10 @@ const size_t max_track = 42;
 
 const int au_full_rotation = 26042; // number of angular units in a full disk rotation
 const uint us_drive_request_delay = 3220; // number of microseconds drive takes to process a request
-const uint ms_crc_calculation = 2; // number of milliseconds to calculate CRC
+const uint us_crc_calculation = 2000;
 const uint us_track_step_810 = 5300; // number of microseconds drive takes to step 1 track
 const uint us_track_step_1050 = 12410;
+//const uint us_track_step_1050 = 20400; // TODO Avery says 20400!
 const uint ms_head_settle_1050 = 40; // number of milliseconds drive head takes to settle after track stepping (0 for 810)
 const int max_retries_810 = 1;
 const int max_retries_1050 = 4;
@@ -1297,8 +1298,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		//	sleep_us(is1050 ? us_track_step_1050 : us_track_step_810);
 		sleep_us(diff*(is1050 ? us_track_step_1050 : us_track_step_810));
 		// delay for head settling
-		if(is1050)
-			sleep_ms(ms_head_settle_1050);
+		sleep_ms(is1050 ? ms_head_settle_1050 : 0);
 	}
 
 	// set new head track position
@@ -1336,39 +1336,40 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			retries--;
 			currentFileOffset = retryOffset;
 			// iterate through all sector headers to find the target sector
-			if(atx_density[atx_drive_number] == (trackHeader->flags & 0x2) ? atx_medium : atx_single)
-			for (i=0; i < sectorCount; i++) {
-				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
-					sectorHeader = (struct atxSectorHeader *)sector_buffer;
+			if(atx_density[atx_drive_number] == (trackHeader->flags & 0x2) ? atx_medium : atx_single) {
+				for (i=0; i < sectorCount; i++) {
+					if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorHeader), false) == FR_OK) {
+						sectorHeader = (struct atxSectorHeader *)sector_buffer;
 
-					// if the sector is not flagged as missing and its number matches the one we're looking for...
-					if (!(sectorHeader->status & mask_fdc_missing) && sectorHeader->number == tgtSectorNumber) {
-						// check if it's the next sector that the head would encounter angularly...
-						int tt = sectorHeader->timev - headPosition;
-						if (pTT == 0 || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
-							pTT = tt;
-							gLastAngle[atx_drive_number] = sectorHeader->timev;
-							*status = sectorHeader->status;
+						// if the sector is not flagged as missing and its number matches the one we're looking for...
+						if (!(sectorHeader->status & mask_fdc_missing) && sectorHeader->number == tgtSectorNumber) {
+							// check if it's the next sector that the head would encounter angularly...
+							int tt = sectorHeader->timev - headPosition;
+							if (pTT == 0 || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
+								pTT = tt;
+								gLastAngle[atx_drive_number] = sectorHeader->timev;
+								*status = sectorHeader->status;
 
-							//if (*status & mask_fdc_dlost)
-							//	*status |= 0x02;
+								//if (*status & mask_fdc_dlost)
+								//	*status |= 0x02;
 
-							if (*status & mask_extended_data)
-								extendedDataRecords++;
-							tgtSectorIndex = i;
-							tgtSectorOffset = sectorHeader->data;
+								if (*status & mask_extended_data)
+									extendedDataRecords++;
+								tgtSectorIndex = i;
+								tgtSectorOffset = sectorHeader->data;
+							}
 						}
+						currentFileOffset += sizeof(struct atxSectorHeader);
 					}
-					currentFileOffset += sizeof(struct atxSectorHeader);
 				}
 			}
 			// if the sector status is bad, delay for a full disk rotation
 			if (*status) {
+				//waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
+				waitForAngularPosition(incAngularDisplacement(headPosition, au_full_rotation/2));
 				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
-				waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), au_full_rotation/2));
-			}else {
+			}else
 				retries = 0;
-			}
 		}
 
 		// ignore the reserved bit
@@ -1403,7 +1404,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		if(!is1050 && (*status & 0x20))
 			*status |= 0x40;
 
-		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + tgtSectorOffset, atx_sector_size, false) == FR_OK)
+		if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber-1] + tgtSectorOffset, atx_sector_size, false) == FR_OK)
 			r = true;
 		if(hasError)
 			r = false;
@@ -1422,7 +1423,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), rotationDelay-rd));
 
 		//waitForAngularPosition(incAngularDisplacement(incAngularDisplacement(headPosition, rotationDelay), au_one_sector_read));
-		sleep_ms(ms_crc_calculation);
+		sleep_us(us_crc_calculation);
 	}
 
 atx_error:
