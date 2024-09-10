@@ -1185,13 +1185,15 @@ const size_t max_track = 42;
 const uint au_full_rotation = 26042; // number of angular units in a full disk rotation
 const uint us_drive_request_delay = 3220; // number of microseconds drive takes to process a request
 //const uint us_crc_calculation = 2000; // According to SDrive-Max
-const uint us_crc_calculation_1050 = 270; // According to Altirra? This is suspiciously low and affects one test result...
-const uint us_crc_calculation_810 = 5136; // According to Altirra
+const uint us_cs_calculation_1050 = 270; // According to Altirra? This is suspiciously low and affects one test result...
+const uint us_cs_calculation_810 = 5136; // According to Altirra
 const uint us_track_step_810 = 5300; // number of microseconds drive takes to step 1 track
 //const uint us_track_step_1050 = 12410; // According to SDrive-Max
 const uint us_track_step_1050 = 20120; // According to Avery / Altirra
-const uint ms_head_settle_1050 = 20; // 40
-const uint ms_head_settle_810 = 10; // 0
+const uint us_head_settle_1050 = 20000;
+const uint us_head_settle_810 = 10000;
+const uint ms_3fake_rot_810 = 1566;
+const uint ms_2fake_rot_1050 = 942;
 const int max_retries_810 = 4;
 const int max_retries_1050 = 2;
 const uint au_one_sector_read = 1208;
@@ -1212,6 +1214,20 @@ uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
 		ret -= au_full_rotation;
 	return ret;
 }
+
+
+typedef struct {
+	absolute_time_t stamp;
+	uint16_t angle;
+} head_position_t;
+
+void getCurrentHeadPosition(head_position_t *hp) {
+	uint64_t s = get_absolute_time();
+	hp->stamp = s;
+	hp->angle = (uint16_t)((to_us_since_boot(s) >> 3) % au_full_rotation);
+	//hp->angle = (uint16_t)(au_full_rotation-disk_counter-1);
+}
+
 
 uint16_t getCurrentHeadPosition() {
 	return (uint16_t)(au_full_rotation-disk_counter-1);
@@ -1249,6 +1265,7 @@ bool loadAtxFile(FIL *fil, int atx_drive_number) {
 	atx_density[atx_drive_number] = fileHeader->density;
 	atx_track_size[atx_drive_number] = (fileHeader->density == atx_medium) ? 26 : 18;
 	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
+	gCurrentHeadTrack[atx_drive_number] = 0;
 
 	uint32_t startOffset = fileHeader->startData;
 	for (uint8_t track = 0; track < max_track; track++) {
@@ -1270,9 +1287,6 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	struct atxTrackChunk *extSectorData;
 
 	uint16_t i;
-	uint16_t tgtSectorIndex; // the index of the target sector within the sector list
-	uint32_t tgtSectorOffset; // the offset of the target sector data
-
 	bool r = false;
 
 	uint8_t extendedDataRecords = 0;
@@ -1281,34 +1295,33 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	bool is1050 = (disk_headers[atx_drive_number].atr_header.temp3 & 0x40) ? false : true;
 
 	// calculate track and relative sector number from the absolute sector number
-	uint8_t tgtTrackNumber = (num - 1) / atx_track_size[atx_drive_number] + 1;
+	uint8_t tgtTrackNumber = (num - 1) / atx_track_size[atx_drive_number];
 	uint8_t tgtSectorNumber = (num - 1) % atx_track_size[atx_drive_number] + 1;
-
-	uint8_t retries = is1050 ? max_retries_1050 : max_retries_810;
-	uint32_t retryOffset;
-	uint16_t lastAngle;
-	int pTT;
 
 	// set initial status (in case the target sector is not found)
 	*status = mask_fdc_missing;
 
 	// delay for track stepping if needed
-	int8_t diff=0;
 	if (gCurrentHeadTrack[atx_drive_number] != tgtTrackNumber) {
-		diff = tgtTrackNumber - gCurrentHeadTrack[atx_drive_number];
-		if (diff < 0) diff = -diff;
-		sleep_us(diff*(is1050 ? us_track_step_1050 : us_track_step_810));
-		sleep_ms(is1050 ? ms_head_settle_1050 : ms_head_settle_810);
+		int diff = tgtTrackNumber - gCurrentHeadTrack[atx_drive_number];
+		if (diff > 0)
+			diff += (is1050 ? 1 : 0);
+		else
+			diff = -diff;
+		sleep_us(is1050 ? (diff*us_track_step_1050 + us_head_settle_1050) : (diff*us_track_step_810 + us_head_settle_810));
 	}
 
 	// set new head track position
 	gCurrentHeadTrack[atx_drive_number] = tgtTrackNumber;
 
 	// sample current head position
-	uint16_t headPosition = getCurrentHeadPosition();
+	//uint16_t headPosition = getCurrentHeadPosition();
+
+	head_position_t headPosition;
+	getCurrentHeadPosition(&headPosition);
 
 	// read the track header
-	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber-1];
+	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber];
 	uint16_t sectorCount = 0;
 
 	// exit, if track not present
@@ -1319,7 +1332,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	}
 
 	// For "healthy" ATX files the first check should probably be always fail
-	if (trackHeader->trackNumber != tgtTrackNumber-1 || atx_density[atx_drive_number] != ((trackHeader->flags & 0x2) ? atx_medium : atx_single))
+	if (trackHeader->trackNumber != tgtTrackNumber || atx_density[atx_drive_number] != ((trackHeader->flags & 0x2) ? atx_medium : atx_single))
 		sectorCount = 0;
 
 	if(sectorCount) {
@@ -1332,11 +1345,14 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			sectorCount = 0;
 	}
 
-	retryOffset = currentFileOffset;
+	uint16_t tgtSectorIndex; // the index of the target sector within the sector list
+	uint32_t tgtSectorOffset; // the offset of the target sector data
+	uint retries = is1050 ? max_retries_1050 : max_retries_810;
+	uint32_t retryOffset = currentFileOffset;
 	while (retries > 0) {
 		retries--;
 		currentFileOffset = retryOffset;
-
+		int pTT;
 		tgtSectorIndex = 0;
 		tgtSectorOffset = 0;
 		// iterate through all sector headers to find the target sector
@@ -1347,13 +1363,11 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 				// if the sector is not flagged as missing and its number matches the one we're looking for...
 				if (!(sectorHeader->status & mask_fdc_missing) && sectorHeader->number == tgtSectorNumber) {
 					// check if it's the next sector that the head would encounter angularly...
-					int tt = sectorHeader->timev - headPosition;
+					//int tt = sectorHeader->timev - headPosition;
+					int tt = sectorHeader->timev - headPosition.angle;
 					if (!tgtSectorOffset || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
 						pTT = tt;
-
-						lastAngle = sectorHeader->timev;
 						*status = sectorHeader->status;
-
 						if (*status & mask_extended_data)
 							extendedDataRecords++;
 						tgtSectorIndex = i;
@@ -1364,27 +1378,30 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 			}
 		}
 		if(tgtSectorOffset){
-			uint16_t rotationDelay = au_one_sector_read + ((lastAngle > headPosition) ? (lastAngle - headPosition) : (au_full_rotation + lastAngle - headPosition));
-			uint16_t rd = rotationDelay >> 1;
-			waitForAngularPosition(incAngularDisplacement(headPosition, rd));
-			waitForAngularPosition(incAngularDisplacement(getCurrentHeadPosition(), rotationDelay-rd));
-			// TODO anything more should be calculated in here?
+			sleep_until(delayed_by_us(headPosition.stamp, (au_one_sector_read + pTT + (pTT > 0 ? 0 : au_full_rotation))*8));
+			if(*status)
+				// TODO This is according to Altirra, but it breaks test J for 1050?!
+				//sleep_us(is1050 ? (us_track_step_1050+us_head_settle_1050) : (au_full_rotation*8));
+				sleep_us(au_full_rotation*8);
 		} else {
-			// No matching sector found or the track does not match the disk density
-			// TODO To be precise this probably should be * 2 and take place after try 1 for 1050 and after try 2 for 810
-			sleep_us((au_full_rotation*32 + (is1050 ? diff : (44+tgtTrackNumber))*(is1050 ? us_track_step_1050 : us_track_step_810) + 1000*(is1050 ? ms_head_settle_1050 : ms_head_settle_810)));
+			// No matching sector found at all or the track does not match the disk density
+			sleep_ms(is1050 ? ms_2fake_rot_1050 : ms_3fake_rot_810);
+			if(is1050 || retries == 2)
+				if(!is1050)
+					sleep_us((43+tgtTrackNumber)*us_track_step_810+us_head_settle_810);
+				else if(tgtTrackNumber)
+					sleep_us((2*tgtTrackNumber+1)*us_track_step_1050+us_head_settle_1050);
 		}
 
-		headPosition = getCurrentHeadPosition();
+		//headPosition = getCurrentHeadPosition();
+		getCurrentHeadPosition(&headPosition);
 		if(!*status)
 			retries = 0;
 	}
 
-	// Stamp the time here, BTW, without this and simple sleep_us the timing seemed better (For 1050 in particular)
-	absolute_time_t t_after = make_timeout_time_us(is1050 ? us_crc_calculation_1050 : us_crc_calculation_810);
 
 	if (extendedDataRecords > 0) {
-		currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber - 1] + trackHeader->headerSize;
+		currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + trackHeader->headerSize;
 		do {
 			if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false) != FR_OK)
 				break;
@@ -1413,7 +1430,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 	if(!is1050 && (*status & 0x20))
 		*status |= 0x40;
 
-	if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber-1] + tgtSectorOffset, atx_sector_size, false) == FR_OK && !*status)
+	if (tgtSectorOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false) == FR_OK && !*status)
 		r = true;
 
 	// if a weak offset is defined, randomize the appropriate data
@@ -1421,8 +1438,7 @@ bool loadAtxSector(int atx_drive_number, uint16_t num, uint8_t *status) {
 		for (i = (uint16_t) weakOffset; i < atx_sector_size; i++)
 			sector_buffer[i] = (uint8_t) get_rand_32();
 
-	//sleep_us(is1050 ? us_crc_calculation_1050 : us_crc_calculation_810);
-	sleep_until(t_after);
+	sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
 
 	// the Atari expects an inverted FDC status byte
 	*status = ~(*status);
@@ -1573,6 +1589,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			int drive_number = sio_command.device_id-0x30;
 			mutex_enter_blocking(&mount_lock);
 			uint8_t r = 'A';
+			uint64_t us_pre_ce = 300;
 			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted)
 				goto ignore_sio_command_frame;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
@@ -1720,6 +1737,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							if (r == 'N')
 								break;
 							to_read = disk_headers[drive_number-1].atr_header.sec_size;
+							us_pre_ce = 0; // Handled in loadAtxSector
 							if(!loadAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
 								f_op_stat = FR_INT_ERR;
 						default:
@@ -1799,7 +1817,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			}
 			if(r == 'A') {
 				uart_tx_wait_blocking(uart1);
-				sleep_us(300); // Again, timeout mentioned by atari_drive_emulator.c
+				sleep_us(us_pre_ce); // Again, timeout mentioned by atari_drive_emulator.c
 				uart_putc_raw(uart1, f_op_stat == FR_OK ? 'C' : 'E');
 				if(to_read) {
 					uart_tx_wait_blocking(uart1);
