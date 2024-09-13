@@ -1077,7 +1077,7 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	uint8_t status = 0;
 	while(i<to_read && uart_is_readable_within_us(uart1, serial_read_timeout))
 		sector_buffer[i++] = (uint8_t)uart_get_hw(uart1)->dr;
-	if(i!=to_read || !uart_is_readable_within_us(uart1, serial_read_timeout) || (uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
+	if(i != to_read || !uart_is_readable_within_us(uart1, serial_read_timeout) || (uint8_t)uart_get_hw(uart1)->dr != sio_checksum(sector_buffer, to_read)) {
 		status |= 0x02;
 		r = 'N';
 	}
@@ -1093,7 +1093,6 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	uint8_t *data = &sector_buffer[t_offset];
 
 	mutex_enter_blocking(&fs_lock);
-	//if(op_write)
 	do {
 		if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 			break;
@@ -1120,7 +1119,6 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	}while(false);
 	f_close(&fil);
 	f_mount(0, "", 1);
-	//if(op_write)
 	mutex_exit(&fs_lock);
 	return f_op_stat;
 }
