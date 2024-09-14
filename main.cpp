@@ -14,6 +14,8 @@
 // https://www.a8preservation.com/#/guides/atx
 // https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
 
+// TODO review the use of std::string and const char * const stuff
+
 #include <string.h>
 #include <cstdlib>
 #include <ctype.h>
@@ -51,46 +53,45 @@
 #endif
 #include "boot_loader.h"
 
-
 #define PICO_UART
 
 const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
-const std::string str_file_transfer = "File transfer...";
+constexpr std::string_view str_file_transfer{"File transfer..."};
 
-const std::string str_press_1 = "USB drive";
-const std::string str_press_2 = "Config reset";
+constexpr std::string_view str_press_1{"USB drive"};
+constexpr std::string_view str_press_2{"Config reset"};
 
-const std::string str_up_dir = "../";
-const std::string str_new_image = "New image...>";
-const std::string str_no_files = "[No files!]";
-const std::string str_no_media = "No media!?";
-const std::string str_config2 = "Config";
-const std::string str_creating = " Creating... ";
-const std::string str_create_failed = "Create failed!";
+constexpr std::string_view str_up_dir{"../"};
+constexpr std::string_view str_new_image{"New image...>"};
 
-const std::string str_about1 = "A8 Pico SIO";
-const std::string str_about2 = "by woj@AtariAge";
-const std::string str_about3 = "(c) 2024";
-const std::string str_about4 = "Inspired by and";
-const std::string str_about5 = "based on code of";
-const std::string str_about6 = "A8PicoCart";
-const std::string str_about7 = "SIO2BSD";
-const std::string str_about8 = "SDriveMAX";
-const std::string str_about9 = "Altirra";
-const std::string str_about10 = "EclaireXL";
-const std::string str_about11 = "Version 0.90";
-const std::string str_about12 = "HW: Pico2 4MB";
+constexpr std::string_view str_no_files{"[No files!]"};
+constexpr std::string_view str_no_media{"No media!?"};
+constexpr std::string_view str_config2{"Config"};
+constexpr std::string_view str_creating{" Creating... "};
+constexpr std::string_view str_create_failed{"Create failed!"};
 
-std::string char_empty = " ";
-std::string char_up = "!";
-std::string char_down = "\"";
-std::string char_left = "#";
-std::string char_right = "$";
-std::string char_inject = "%";
-std::string char_eject = "&";
-std::string char_play = "'";
-std::string char_stop = "(";
+constexpr std::string_view str_about1{"A8 Pico SIO"};
+constexpr std::string_view str_about2{"by woj@AtariAge"};
+constexpr std::string_view str_about3{"(c) 2024"};
+constexpr std::string_view str_about4{"Inspired by and"};
+constexpr std::string_view str_about5{"based on code of"};
+constexpr std::string_view str_about6{"A8PicoCart"};
+constexpr std::string_view str_about7{"SIO2BSD"};
+constexpr std::string_view str_about8{"SDriveMAX"};
+constexpr std::string_view str_about9{"Altirra"};
+constexpr std::string_view str_about10{"EclaireXL"};
+constexpr std::string_view str_about11{"Version 0.90"};
+
+constexpr std::string_view char_empty{" "};
+constexpr std::string_view char_up{"!"};
+constexpr std::string_view char_down{"\""};
+constexpr std::string_view char_left{"#"};
+constexpr std::string_view char_right{"$"};
+constexpr std::string_view char_inject{"%"};
+constexpr std::string_view char_eject{"&"};
+constexpr std::string_view char_play{"'"};
+constexpr std::string_view char_stop{"("};
 
 using namespace pimoroni;
 
@@ -100,7 +101,7 @@ PicoGraphics_PenP4 graphics(st7789.width, st7789.height, nullptr);
 uint32_t inline str_x(uint32_t l) { return (st7789.width - l*8*font_scale)/2; }
 uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
-Point text_location(str_x(str_press_2.length()+2), str_y(5)-4*font_scale);
+Point text_location(str_x(str_press_2.size()+2), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
 
@@ -132,12 +133,12 @@ volatile int8_t blue_blinks = 0;
 
 void print_text_wait(const std::string_view &t) {
 	red_blinks = 6;
-	text_location.x = str_x(t.length());
+	text_location.x = str_x(t.size());
 	text_location.y = (14*8-4)*font_scale;
-	print_text(t, t.length());
+	print_text(t, t.size());
 	st7789.update(&graphics);
 	sleep_ms(2000);
-	Rect r(text_location.x,text_location.y,8*t.length(),8*font_scale);
+	Rect r(text_location.x,text_location.y,8*t.size(),8*font_scale);
 	graphics.set_pen(BG); graphics.rectangle(r);
 	st7789.update(&graphics);
 }
@@ -234,7 +235,7 @@ void scroll_long_filename() {
 void usb_drive() {
 	graphics.set_pen(BG); graphics.clear();
 
-	text_location.x = str_x(str_file_transfer.length());
+	text_location.x = str_x(str_file_transfer.size());
 	text_location.y = str_y(1);
 	print_text(str_file_transfer);
 	st7789.update(&graphics);
@@ -310,7 +311,7 @@ bool repeating_timer_directory(struct repeating_timer *t) {
 	return true;
 }
 
-const std::string option_names[] = {
+const std::string_view option_names[] = {
 	"Mount RdWr:",
 	"Host Clock:",
 	"HSIO Speed:",
@@ -325,25 +326,25 @@ const int option_count = 9;
 
 typedef struct {
 	const int count;
-	const char **short_names;
-	const char **long_names;
+	const char* const *short_names;
+	const char* const *long_names;
 } option_list;
 
-const char *mount_option_names_short[] = {"  OFF", "   ON"};
-const char *mount_option_names_long[] = {"Read-only", "Read/Write"};
-const char *clock_option_names_short[] = {"  PAL", " NTSC"};
-const char *clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
-const char *hsio_option_names_short[] = {"  $28", "  $10", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
-const char *hsio_option_names_long[] = {"$28 OFF/Standard", "$10 ~39 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
-const char *atx_option_names_short[] = {" 1050", "  810"};
-const char *atx_option_names_long[] = {"Atari 1050", "Atari 810"};
-const char *xex_option_names_short[] = {" $700", " $500", " $600", " $800", " $900", " $A00"};
-const char *xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800", "Loader at $900", "Loader at $A00"};
-const char *turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
-const char *turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
-const char *turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
-const char *turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
-const char *turbo3_option_names_long[] = {"Normal", "Inverted"};
+const char * const mount_option_names_short[] = {"  OFF", "   ON"};
+const char * const mount_option_names_long[] = {"Read-only", "Read/Write"};
+const char * const clock_option_names_short[] = {"  PAL", " NTSC"};
+const char * const clock_option_names_long[] = {"PAL at 1.77MHz", "NTSC at 1.79MHz"};
+const char * const hsio_option_names_short[] = {"  $28", "  $10", "   $6", "   $5","   $4", "   $3","   $2", "   $1", "   $0"};
+const char * const hsio_option_names_long[] = {"$28 OFF/Standard", "$10 ~39 kbit/s", " $6 ~68 kbit/s", " $5 ~74 kbit/s"," $4 ~81 kbit/s", " $3 ~90 kbit/s", " $2 ~99 kbit/s", " $1 ~111 kbit/s", " $0 ~127 kbit/s"};
+const char * const atx_option_names_short[] = {" 1050", "  810"};
+const char * const atx_option_names_long[] = {"Atari 1050", "Atari 810"};
+const char * const xex_option_names_short[] = {" $700", " $500", " $600", " $800", " $900", " $A00"};
+const char * const xex_option_names_long[] = {"Loader at $700", "Loader at $500", "Loader at $600", "Loader at $800", "Loader at $900", "Loader at $A00"};
+const char * const turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
+const char * const turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
+const char * const turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
+const char * const turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
+const char * const turbo3_option_names_long[] = {"Normal", "Inverted"};
 
 const int mount_option_index = 0;
 const int clock_option_index = 1;
@@ -535,15 +536,16 @@ int32_t read_directory(int32_t page_index, int page_size) {
 int cursor_prev = -1;
 int cursor_position = 1;
 
-const std::string str_config = "Config...";
-std::string str_d1 = "D1:  <EMPTY>   ";
-std::string str_d2 = "D2:  <EMPTY>   ";
-std::string str_d3 = "D3:  <EMPTY>   ";
-std::string str_d4 = "D4:  <EMPTY>   ";
-const std::string str_rot_up = "Rotate Up";
-const std::string str_rot_down = "Rotate Down";
-std::string str_cas = "C:  <EMPTY>   ";
-const std::string str_about = "About...";
+const char * const str_config = "Config...";
+char str_d1[] = "D1:  <EMPTY>   ";
+char str_d2[] = "D2:  <EMPTY>   ";
+char str_d3[] = "D3:  <EMPTY>   ";
+char str_d4[] = "D4:  <EMPTY>   ";
+const char * const str_rot_up = "Rotate Up";
+const char * const str_rot_down = "Rotate Down";
+char str_cas[] = "C:  <EMPTY>   ";
+const char * const str_about = "About...";
+
 
 const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
 
@@ -555,7 +557,7 @@ const file_type menu_to_type[] = {
 };
 
 typedef struct {
-	std::string *str;
+	char *str;
 	char *mount_path;
 	bool mounted;
 	Pen rw;
@@ -569,11 +571,11 @@ char d4_mount[256] = {0};
 char c_mount[256] = {0};
 
 mounts_type mounts[] = {
-	{.str=&str_cas, .mount_path=c_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=&str_d1, .mount_path=d1_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=&str_d2, .mount_path=d2_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=&str_d3, .mount_path=d3_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=&str_d4, .mount_path=d4_mount, .mounted=false, .rw=BG, .status = 0}
+	{.str=str_cas, .mount_path=c_mount, .mounted=false, .rw=BG, .status = 0},
+	{.str=str_d1, .mount_path=d1_mount, .mounted=false, .rw=BG, .status = 0},
+	{.str=str_d2, .mount_path=d2_mount, .mounted=false, .rw=BG, .status = 0},
+	{.str=str_d3, .mount_path=d3_mount, .mounted=false, .rw=BG, .status = 0},
+	{.str=str_d4, .mount_path=d4_mount, .mounted=false, .rw=BG, .status = 0}
 };
 
 const size_t sector_buffer_size = 512;
@@ -641,7 +643,6 @@ disk_header_type disk_headers[4];
 const uint8_t disk_type_atr = 1;
 const uint8_t disk_type_xex = 2;
 const uint8_t disk_type_atx = 3;
-
 
 uint8_t locate_percom(int drive_number) {
 	int i = 0;
@@ -1773,7 +1774,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 										memset(&sector_buffer[5], ' ', 8);
 										offset = 0;
 										for(i=0; i<11; i++) {
-											uint8_t c = (*mounts[drive_number].str)[3+offset];
+											uint8_t c = mounts[drive_number].str[3+offset];
 											if(c == '.')
 												i = 7;
 											else {
@@ -1885,6 +1886,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case '!': // Format SD / PERCOM
 				case '"': // Format ED
+					// TODO 1 Disable it for ATX? If not, allow for proper formatting of ATX?
+					// TODO 2 Add delay on each transferred block to make the GUI more responsive
 					mounts[drive_number].rw = RED;
 					i = sio_command.command_id - 0x21;
 					if( /* !mounts[drive_number].mounted || */
@@ -2203,28 +2206,28 @@ void core1_entry() {
 }
 
 typedef struct {
-	std::string *str;
+	char *str;
 	int x, y;
 	size_t wd;
 } menu_entry;
 
 const menu_entry menu_entries[] = {
-	{.str = (std::string*)&str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=str_config.length()},
-	{.str = &str_d1,.x=3*8*font_scale,.y=(3*8-4)*font_scale,.wd=str_d1.length()},
-	{.str = &str_d2,.x=3*8*font_scale,.y=(4*8-4)*font_scale,.wd=str_d2.length()},
-	{.str = &str_d3,.x=3*8*font_scale,.y=(5*8-4)*font_scale,.wd=str_d3.length()},
-	{.str = &str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=str_d4.length()},
-	{.str = (std::string*)&str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=str_rot_up.length()},
-	{.str = (std::string*)&str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=str_rot_down.length()},
-	{.str = &str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=str_cas.length()},
-	{.str = (std::string*)&str_about,.x=(6*8+4)*font_scale,.y=(13*8+4)*font_scale,.wd=str_about.length()}
+	{.str = (char *)str_config,.x=6*8*font_scale,.y=4*font_scale,.wd=strlen(str_config)},
+	{.str = str_d1,.x=3*8*font_scale,.y=(3*8-4)*font_scale,.wd=strlen(str_d1)},
+	{.str = str_d2,.x=3*8*font_scale,.y=(4*8-4)*font_scale,.wd=strlen(str_d2)},
+	{.str = str_d3,.x=3*8*font_scale,.y=(5*8-4)*font_scale,.wd=strlen(str_d3)},
+	{.str = str_d4,.x=3*8*font_scale,.y=(6*8-4)*font_scale,.wd=strlen(str_d4)},
+	{.str = (char *)str_rot_up,.x=6*8*font_scale,.y=(7*8)*font_scale,.wd=strlen(str_rot_up)},
+	{.str = (char *)str_rot_down,.x=5*8*font_scale,.y=(8*8)*font_scale,.wd=strlen(str_rot_down)},
+	{.str = str_cas,.x=3*8*font_scale,.y=(10*8)*font_scale,.wd=strlen(str_cas)},
+	{.str = (char *)str_about,.x=(6*8+4)*font_scale,.y=(13*8+4)*font_scale,.wd=strlen(str_about)}
 };
 const size_t menu_entry_size = 9;
 
 const uint mount_to_menu[] = {7,1,2,3,4};
 
 typedef struct {
-	std::string *str;
+	const std::string_view *str;
 	int x, y;
 } button_entry;
 
@@ -2257,7 +2260,7 @@ void update_buttons(button_entry menu_buttons[], const int num_buttons) {
 void update_menu_entry(int i) {
 	text_location.x = menu_entries[i].x;
 	text_location.y = menu_entries[i].y;
-	print_text(*(menu_entries[i].str), i==cursor_position ? menu_entries[i].wd : 0);
+	print_text(menu_entries[i].str, i==cursor_position ? menu_entries[i].wd : 0);
 }
 
 const uint16_t cas_pg_width = 208;
@@ -2322,7 +2325,7 @@ void update_one_display_file(int i, int fi) {
 		if(ei < pe) pe = ei;
 		std::string s2(&f[ei]);
 		text_location.x += pe*8*font_scale;
-		print_text(s2, i == cursor_position ? s2.length() : 0);
+		print_text(s2, i == cursor_position ? s2.size() : 0);
 		text_location.x -= pe*8*font_scale;
 	} else {
 		text_location.x += 8*8*font_scale;
@@ -2363,8 +2366,8 @@ void update_display_files(int page_index, int shift_index) {
 		for(int i = 0; i < num_files_page; i++) {
 			text_location.y = 8*(1+i)*font_scale;
 			if(!page_index && i < shift_index) {
-				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
-				print_text(*s, i == cursor_position ? (*s).length() : 0);
+				std::string_view s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
+				print_text(s, (i == cursor_position) ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
 		}
@@ -2375,8 +2378,8 @@ void update_display_files(int page_index, int shift_index) {
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 			if(!page_index && i < shift_index) {
-				std::string *s = (std::string *)((!i && ft == file_type::disk) ? &str_new_image : &str_up_dir);
-				print_text(*s, i == cursor_position ? (*s).length() : 0);
+				std::string_view s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
+				print_text(s, i == cursor_position ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
 			if(i == cursor_position)
@@ -2386,31 +2389,30 @@ void update_display_files(int page_index, int shift_index) {
 	}
 }
 
-const std::string new_image_sd = " SD 90K";
-const std::string new_image_ed = " ED 130K";
-const std::string new_image_dd = " DD 180K";
-const std::string new_image_qd = " QD 360K";
+constexpr std::string_view new_image_sd{" SD 90K"};
+constexpr std::string_view new_image_ed{" ED 130K"};
+constexpr std::string_view new_image_dd{" DD 180K"};
+constexpr std::string_view new_image_qd{" QD 360K"};
 
-const std::string new_image_none = " None";
-const std::string new_image_dos = " DOS 2.x";
-const std::string new_image_mydos = " MyDOS";
-const std::string new_image_sparta = " SpartaDOS";
-const std::string new_image_yes = " Yes";
-const std::string new_image_no = " No";
+constexpr std::string_view new_image_none{" None"};
+constexpr std::string_view new_image_dos{" DOS 2.x"};
+constexpr std::string_view new_image_mydos{" MyDOS"};
+constexpr std::string_view new_image_sparta{" SpartaDOS"};
+constexpr std::string_view new_image_yes{" Yes"};
+constexpr std::string_view new_image_no{" No"};
 
-const std::string *new_file_options_0[] = { &new_image_sd, &new_image_ed, &new_image_dd, &new_image_qd };
-const std::string *new_file_options_1[] = { &new_image_none, &new_image_dos, &new_image_mydos, &new_image_sparta };
-const std::string *new_file_options_2[] = { &new_image_none, &new_image_mydos, &new_image_sparta };
-const std::string *new_file_options_3[] = { &new_image_yes, &new_image_no };
+const std::string_view *new_file_options_0[] = { &new_image_sd, &new_image_ed, &new_image_dd, &new_image_qd };
+const std::string_view *new_file_options_1[] = { &new_image_none, &new_image_dos, &new_image_mydos, &new_image_sparta };
+const std::string_view *new_file_options_2[] = { &new_image_none, &new_image_mydos, &new_image_sparta };
+const std::string_view *new_file_options_3[] = { &new_image_yes, &new_image_no };
 
 const uint8_t new_file_options_2_vals[] = {1, 3, 4};
-//const uint16_t new_file_options_0_count = 4;
 
-const std::string new_image_title_0 = "Size?";
-const std::string new_image_title_1 = "Format?";
-const std::string new_image_title_2 = "Dummy boot?";
+constexpr std::string_view new_image_title_0{"Size?"};
+constexpr std::string_view new_image_title_1{"Format?"};
+constexpr std::string_view new_image_title_2{"Dummy boot?"};
 
-const std::string *new_file_titles[] = { &new_image_title_0, &new_image_title_1, &new_image_title_1, &new_image_title_2 };
+const std::string_view *new_file_titles[] = { &new_image_title_0, &new_image_title_1, &new_image_title_1, &new_image_title_2 };
 
 void update_one_new_file_option(int i, int opt_level) {
 	print_text(!opt_level ? *(new_file_options_0[i])  : (opt_level == 1 ? *(new_file_options_1[i]) : (opt_level == 3 ? *(new_file_options_3[i]) : *(new_file_options_2[i]))) , i == cursor_position ? 12 : 0);
@@ -2505,7 +2507,7 @@ bool mount_file(char *f, int file_entry_index) {
 	j = 0;
 	int si = (ft == file_type::disk) ? 3 : 2;
 	while(j<12) {
-		(*mounts[file_entry_index].str)[si+j] = (j < strlen(f) ? f[j] : ' ');
+		mounts[file_entry_index].str[si+j] = (j < strlen(f) ? f[j] : ' ');
 		j++;
 	}
 	if(file_entry_index) mutex_exit(&mount_lock);
@@ -2530,9 +2532,9 @@ void get_file(int file_entry_index) {
 		}
 		graphics.set_pen(BG); graphics.clear();
 		if(r < 0) {
-			text_location.x = str_x(str_no_media.length());
+			text_location.x = str_x(str_no_media.size());
 			text_location.y = 7*8*font_scale;
-			print_text(str_no_media, str_no_media.length());
+			print_text(str_no_media, str_no_media.size());
 			update_buttons(nomedia_buttons, nomedia_buttons_size);
 			st7789.update(&graphics);
 			while(!button_b.read())
@@ -2544,9 +2546,9 @@ void get_file(int file_entry_index) {
 		update_buttons(main_buttons, main_buttons_size);
 
 		if(!num_files) {
-			text_location.x = str_x(str_no_files.length());
+			text_location.x = str_x(str_no_files.size());
 			text_location.y = 7*8*font_scale;
-			print_text(str_no_files, str_no_files.length());
+			print_text(str_no_files, str_no_files.size());
 		}
 		int num_pages = (num_files+shift_index+files_per_page-1) / files_per_page;
 		int last_page = (num_files+shift_index) % files_per_page;
@@ -2642,13 +2644,13 @@ void get_file(int file_entry_index) {
 							print_text(f);
 							int16_t cnf = select_new_file_options(0, 0);
 							if(cnf) {
-								text_location.x = str_x(str_creating.length());
+								text_location.x = str_x(str_creating.size());
 								text_location.y = (14*8-4)*font_scale;
-								print_text(str_creating, str_creating.length());
+								print_text(str_creating, str_creating.size());
 								st7789.update(&graphics);
 								create_new_file = cnf;
 								while(create_new_file > 0) tight_loop_contents();
-								Rect r2(text_location.x,text_location.y,8*str_creating.length(),8*font_scale);
+								Rect r2(text_location.x,text_location.y,8*str_creating.size(),8*font_scale);
 								graphics.set_pen(BG); graphics.rectangle(r2);
 								st7789.update(&graphics);
 								if(!create_new_file) {
@@ -2733,14 +2735,14 @@ void select_option(int opt_num) {
 	cursor_prev = -1;
 	cursor_position = current_options[opt_num];
 
-	const char **opt_names = option_lists[opt_num].long_names;
+	const char **opt_names = (const char **)option_lists[opt_num].long_names;
 	int opt_count = option_lists[opt_num].count;
 	update_selections(opt_names, opt_count);
 
-	text_location.x = str_x(option_names[opt_num].length());
+	text_location.x = str_x(option_names[opt_num].size());
 	text_location.y = 4*font_scale;
 	print_text(option_names[opt_num]);
-	Rect r(text_location.x,text_location.y+10*font_scale,option_names[opt_num].length()*8*font_scale,2*font_scale);
+	Rect r(text_location.x,text_location.y+10*font_scale,option_names[opt_num].size()*8*font_scale,2*font_scale);
 	graphics.set_pen(WHITE); graphics.rectangle(r);
 
 	main_buttons[0].str = &char_left;
@@ -2778,9 +2780,9 @@ void update_options_entry(int i, bool erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
 	}
-	print_text(option_names[i], i==cursor_position ? option_names[i].length() : 0);
+	print_text(option_names[i], i==cursor_position ? option_names[i].size() : 0);
 	if(i != option_count-1) {
-		text_location.x += option_names[i].length()*8*font_scale;
+		text_location.x += option_names[i].size()*8*font_scale;
 		print_text(option_lists[i].short_names[current_options[i]], i==cursor_position ? 5 : 0);
 	}
 }
@@ -2810,10 +2812,10 @@ void change_options() {
 
 restart_options:
 	update_options();
-	text_location.x = str_x(str_config2.length());
+	text_location.x = str_x(str_config2.size());
 	text_location.y = 4*font_scale;
 	print_text(str_config2);
-	Rect r(text_location.x,text_location.y+10*font_scale,str_config2.length()*8*font_scale,2*font_scale);
+	Rect r(text_location.x,text_location.y+10*font_scale,str_config2.size()*8*font_scale,2*font_scale);
 	graphics.set_pen(WHITE); graphics.rectangle(r);
 
 	main_buttons[0].str = &char_left;
@@ -2854,43 +2856,43 @@ restart_options:
 
 void show_about() {
 	graphics.set_pen(BG); graphics.clear();
-	text_location.x = str_x(str_about1.length());
+	text_location.x = str_x(str_about1.size());
 	text_location.y = 4*font_scale;
-	print_text(str_about1, str_about1.length());
+	print_text(str_about1, str_about1.size());
 
-	text_location.x = str_x(str_about2.length());
+	text_location.x = str_x(str_about2.size());
 	text_location.y += 10*font_scale;
 	print_text(str_about2);
 
-	text_location.x = str_x(str_about3.length());
+	text_location.x = str_x(str_about3.size());
 	text_location.y += 10*font_scale;
 	print_text(str_about3);
 
-	text_location.x = str_x(str_about4.length());
+	text_location.x = str_x(str_about4.size());
 	text_location.y += 16*font_scale;
 	print_text(str_about4);
 
-	text_location.x = str_x(str_about5.length());
+	text_location.x = str_x(str_about5.size());
 	text_location.y += 10*font_scale;
 	print_text(str_about5);
 
-	text_location.x = str_x(str_about6.length()+str_about7.length()+1);
+	text_location.x = str_x(str_about6.size()+str_about7.size()+1);
 	text_location.y += 12*font_scale;
-	print_text(str_about6, str_about6.length());
-	text_location.x += font_scale*8*(1+ str_about6.length());
-	print_text(str_about7, str_about7.length());
+	print_text(str_about6, str_about6.size());
+	text_location.x += font_scale*8*(1+ str_about6.size());
+	print_text(str_about7, str_about7.size());
 
-	text_location.x = str_x(str_about8.length()+str_about9.length()+1);
+	text_location.x = str_x(str_about8.size()+str_about9.size()+1);
 	text_location.y += 10*font_scale;
-	print_text(str_about8, str_about8.length());
-	text_location.x += font_scale*8*(1+ str_about8.length());
-	print_text(str_about9, str_about9.length());
+	print_text(str_about8, str_about8.size());
+	text_location.x += font_scale*8*(1+ str_about8.size());
+	print_text(str_about9, str_about9.size());
 
-	text_location.x = str_x(str_about10.length());
+	text_location.x = str_x(str_about10.size());
 	text_location.y += 10*font_scale;
-	print_text(str_about10, str_about10.length());
+	print_text(str_about10, str_about10.size());
 
-	text_location.x = str_x(str_about11.length());
+	text_location.x = str_x(str_about11.size());
 	text_location.y += 16*font_scale;
 	print_text(str_about11);
 
@@ -2981,17 +2983,17 @@ int main() {
 					int li = (cursor_position - 5) ? 1 : 4;
 					int di = (cursor_position - 5) ? -1 : 1;
 					mutex_enter_blocking(&mount_lock);
-					memcpy(temp_array, &(*mounts[si].str)[3], 13);
+					memcpy(temp_array, &mounts[si].str[3], 13);
 					memcpy(&temp_array[16], (const void *)mounts[si].mount_path, 256);
 					bool t = mounts[si].mounted;
 					for(int i=si; i != li; i += di) {
-						memcpy(&(*mounts[i].str)[3], &(*mounts[i+di].str)[3], 13);
+						memcpy(&mounts[i].str[3], &mounts[i+di].str[3], 13);
 						memcpy((void *)mounts[i].mount_path, (void *)mounts[i+di].mount_path, 256);
 						mounts[i].mounted = mounts[i+di].mounted;
 						mounts[i].status = 0;
 						mounts[i].rw = BG;
 					}
-					memcpy(&(*mounts[li].str)[3], temp_array, 13);
+					memcpy(&mounts[li].str[3], temp_array, 13);
 					memcpy((void *)mounts[li].mount_path, &temp_array[16], 256);
 					mounts[li].mounted = t;
 					mounts[li].status = 0;
