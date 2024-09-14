@@ -14,7 +14,7 @@
 // https://www.a8preservation.com/#/guides/atx
 // https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
 
-// TODO review the use of std::string and const char * const stuff
+// TODO Test DD formatting with MyDOS
 
 #include <string.h>
 #include <cstdlib>
@@ -52,8 +52,6 @@
 #include "disk_counter.pio.h"
 #endif
 #include "boot_loader.h"
-
-#define PICO_UART
 
 const uint32_t usb_boot_delay = 3000;
 const uint8_t font_scale = 2;
@@ -185,8 +183,6 @@ bool repeating_timer_led(struct repeating_timer *t) {
 }
 
 std::string *ptr_str_file_name;
-
-// TODO The scroll thing could be a C++ struct/class? like ProgressBar
 
 const int scroll_fine_step = 4;
 size_t scroll_length, scroll_size, scroll_index;
@@ -967,7 +963,7 @@ bool try_get_sio_command(uint gpio, uint32_t event_mask) {
 		else
 			freshly_changed = 0;
 	}else{
-		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) { // TODO now
+		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) {
 			high_speed ^= 1;
 			freshly_changed = 2;
 			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
@@ -1042,7 +1038,7 @@ bool try_get_sio_command2() {
 			blue_blinks = (high_speed == 1) ? -1 : 0;
 			update_rgb_led(false);
 		}else
-			desync = 1; // TODO ???
+			desync = 1;
 	}
 
 	if(!r)
@@ -1656,9 +1652,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted)
 				goto ignore_sio_command_frame;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
-#ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
-#endif
 			memset(sector_buffer, 0, sector_buffer_size);
 			blue_blinks = (high_speed == 1) ? -1 : 0;
 			update_rgb_led(false);
@@ -1956,9 +1950,7 @@ ignore_sio_command_frame:
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
-#ifdef PICO_UART
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
-#endif
 			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
 			while(silence_duration > 0) {
 				uint16_t silence_block_len = silence_duration;
@@ -2193,15 +2185,14 @@ void core1_entry() {
 	irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
 	irq_set_enabled(DMA_IRQ_1, true);
 
-#ifdef PICO_UART
 	uart_init(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 	gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 	gpio_set_function(sio_rx_pin, GPIO_FUNC_UART);
 	uart_set_hw_flow(uart1, false, false);
-	uart_set_fifo_enabled(uart1, false); // TODO now
+	uart_set_fifo_enabled(uart1, false);
 	uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
-#endif
-	/// gpio_set_irq_enabled_with_callback(command_line_pin, GPIO_IRQ_EDGE_FALL, true, try_get_sio_command); // TODO now
+
+	/// gpio_set_irq_enabled_with_callback(command_line_pin, GPIO_IRQ_EDGE_FALL, true, try_get_sio_command);
 	main_sio_loop(sm, sm_turbo);
 }
 
