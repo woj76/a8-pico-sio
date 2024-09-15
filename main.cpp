@@ -14,8 +14,6 @@
 // https://www.a8preservation.com/#/guides/atx
 // https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
 
-// TODO Test DD formatting with MyDOS
-
 #include <string.h>
 #include <cstdlib>
 #include <ctype.h>
@@ -653,6 +651,7 @@ uint8_t locate_percom(int drive_number) {
 	return r;
 }
 
+/*
 bool inline compare_percom(int drive_number) {
 	int i = disk_headers[drive_number-1].atr_header.temp3;
 	if(i & 0x80)
@@ -662,6 +661,7 @@ bool inline compare_percom(int drive_number) {
 		return false;
 	return true;
 }
+*/
 
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	uint bytes_read;
@@ -890,7 +890,6 @@ typedef struct __attribute__((__packed__)) {
 	uint8_t command_id;
 	uint16_t sector_number;
 	uint8_t checksum;
-	uint8_t temp;
 } sio_command_type;
 
 sio_command_type sio_command;
@@ -912,13 +911,12 @@ const uint32_t serial_read_timeout = 5000;
 auto_init_mutex(mount_lock);
 
 // volatile bool sio_command_received = false;
+// uint gpio, uint32_t event_mask
 
-
-bool try_get_sio_command(uint gpio, uint32_t event_mask) {
+bool try_get_sio_command() {
 	//if(gpio != command_line_pin || !(event_mask & GPIO_IRQ_EDGE_FALL))
 	//	return false;
 	// sio_command_received = false;
-	// static uint16_t desync = 0;
 	static uint16_t freshly_changed = 0;
 	bool r = true;
 	int i = 0;
@@ -929,11 +927,11 @@ bool try_get_sio_command(uint gpio, uint32_t event_mask) {
 	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
 		return false;
 
-	// TODO add sleep?
+	// add sleep?
 	//if(gpio_get(normal_motor_pin))
 	//		return;
 
-	memset(&sio_command, 0x01, 6);
+	memset(&sio_command, 0x01, 5);
 
 	// HiassofT suggests that if bytes == 5 with wrong checksum only or only a single framing error
 	// repeat once without changing the speed
@@ -975,77 +973,6 @@ bool try_get_sio_command(uint gpio, uint32_t event_mask) {
 	// sio_command_received = r;
 	return r;
 }
-
-/*
-bool try_get_sio_command2() {
-	static int last_drive = -1;
-	static uint16_t desync = 0;
-	bool r = true;
-	int i=0;
-	uint framing_errors=0;
-	memset(&sio_command, 0x01, 6);
-
-	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin)) {
-		blue_blinks = 0;
-		update_rgb_led(false);
-		return false;
-	}
-	mutex_enter_blocking(&mount_lock);
-
-	while(!gpio_get(command_line_pin) && i<5 && uart_is_readable_within_us(uart1, serial_read_timeout)) {
-		if(uart_get_hw(uart1)->rsr) {
-			framing_errors++;
-			hw_clear_bits(&uart_get_hw(uart1)->rsr, UART_UARTRSR_BITS);
-		}
-		if(framing_errors > 1)
-			break;
-		((uint8_t *)&sio_command)[i++] = (uint8_t)uart_get_hw(uart1)->dr;
-	}
-
-
-	while(!gpio_get(command_line_pin) && uart_is_readable(uart1)) {
-		((uint8_t *)&sio_command)[i == 6 ? 5 : i] = (uint8_t)uart_get_hw(uart1)->dr;
-		if(i == 5) i = 6;
-	}
-
-	if(gpio_get(command_line_pin) || framing_errors > 1 || i != 5)
-		desync = 2;
-	else if(sio_checksum((uint8_t *)&sio_command, 4) != sio_command.checksum || framing_errors)
-		desync++;
-	else
-		desync = 0;
-
-	if(desync) {
-		r = false;
-		if(last_drive >= 0)
-			disk_headers[last_drive].atr_header.temp1 |= 0x01;
-	}else if(sio_command.device_id < 0x31 || sio_command.device_id > 0x34 || !mounts[sio_command.device_id-0x30].mounted)
-		r = false;
-
-	if(current_options[hsio_option_index] && high_speed >= 0 && desync >= 2) {
-		high_speed ^= 1;
-		uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
-		uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
-		desync = 0;
-	} else if(!desync) {
-		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
-		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
-			tight_loop_contents();
-		r &= gpio_get(command_line_pin);
-		if(r) {
-			last_drive = sio_command.device_id-0x31;
-			disk_headers[last_drive].atr_header.temp1 = 0x0;
-			blue_blinks = (high_speed == 1) ? -1 : 0;
-			update_rgb_led(false);
-		}else
-			desync = 1;
-	}
-
-	if(!r)
-		mutex_exit(&mount_lock);
-	return r;
-}
-*/
 
 uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, FSIZE_t *to_read, bool op_write=false) {
 
@@ -1244,7 +1171,7 @@ void waitForAngularPosition(uint16_t pos) {
 	while(getCurrentHeadPosition() != pos)
 		tight_loop_contents();
 
-	// TODO Alternative 2
+	// Alternative 2
 	//int32_t to_wait = pos - getCurrentHeadPosition();
 	//if(to_wait < 0)
 	//	to_wait += au_full_rotation;
@@ -1642,8 +1569,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				red_blinks += 4;
 		}
 
-		// TODO now
-		if(try_get_sio_command(command_line_pin, GPIO_IRQ_EDGE_FALL)) {
+		// command_line_pin, GPIO_IRQ_EDGE_FALL
+		if(try_get_sio_command()) {
 			//sio_command_received = false;
 			int drive_number = sio_command.device_id-0x30;
 			mutex_enter_blocking(&mount_lock);
@@ -1810,8 +1737,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
 					r = try_receive_data(drive_number, 12);
-					if(r == 'A' && !compare_percom(drive_number))
-						r = 'N';
+					// TODO It seems I have little clue of what the various DOSes might like to write here,
+					// so let's accept anything...
+					//if(r == 'A' && !compare_percom(drive_number))
+					//	r = 'N';
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
@@ -1880,24 +1809,40 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case '!': // Format SD / PERCOM
 				case '"': // Format ED
-					// TODO 1 Disable it for ATX? If not, allow for proper formatting of ATX?
-					// TODO 2 Add delay on each transferred block to make the GUI more responsive
-					mounts[drive_number].rw = RED;
-					i = sio_command.command_id - 0x21;
-					if( /* !mounts[drive_number].mounted || */
-						(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
-						(i != (disk_headers[drive_number-1].atr_header.temp3 & 0x3)
-							&& !(disk_headers[drive_number-1].atr_header.temp3 & 0x4)))
+					switch(disk_headers[drive_number-1].atr_header.temp4) {
+					case disk_type_atr:
+						mounts[drive_number].rw = RED;
+						i = sio_command.command_id - 0x21;
+						if( /* !mounts[drive_number].mounted || */
+							(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
+							(i != (disk_headers[drive_number-1].atr_header.temp3 & 0x3)
+								&& !(disk_headers[drive_number-1].atr_header.temp3 & 0x4)))
+							r = 'N';
+						uart_putc_raw(uart1, r);
+						if(r == 'N') break;
+						to_read = disk_headers[drive_number-1].atr_header.sec_size;
+						memset(sector_buffer, 0, to_read);
+						offset = mounts[drive_number].status >> 7;
+						for(i=0; i<offset; i++) {
+							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true)) != FR_OK)
+								break;
+							// Give the GUI some time to "breath"
+							// This does not seem to work, buttons are still not responsive
+							// but the write red icon is likely to be more "alive"
+							if(i && i != offset-1 && !(i & 0x3))
+								sleep_ms(20);
+						}
+						sector_buffer[0] = sector_buffer[1] = 0xFF;
+						break;
+					case disk_type_xex:
+					case disk_type_atx:
+						// TODO Allow for ATX formatting? Seems totally pointless.
 						r = 'N';
-					uart_putc_raw(uart1, r);
-					if(r == 'N') break;
-					to_read = disk_headers[drive_number-1].atr_header.sec_size;
-					memset(sector_buffer, 0, to_read);
-					offset = mounts[drive_number].status >> 7;
-					for(i=0; i<offset; i++)
-						if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true)) != FR_OK)
-							break;
-					sector_buffer[0] = sector_buffer[1] = 0xFF;
+						uart_putc_raw(uart1, r);
+						// break;
+					default:
+						break;
+					}
 					break;
 				case '?': // get speed index
 					if(!current_options[hsio_option_index] || disk_headers[drive_number-1].atr_header.temp4 == disk_type_atx)
@@ -2357,7 +2302,7 @@ void update_display_files(int page_index, int shift_index) {
 		for(int i = 0; i < num_files_page; i++) {
 			text_location.y = 8*(1+i)*font_scale;
 			if(!page_index && i < shift_index) {
-				std::string_view s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
+				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
 				print_text(s, (i == cursor_position) ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
@@ -2369,7 +2314,7 @@ void update_display_files(int page_index, int shift_index) {
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 			if(!page_index && i < shift_index) {
-				std::string_view s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
+				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
 				print_text(s, i == cursor_position ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
@@ -2890,7 +2835,7 @@ void show_about() {
 #ifdef PICO_BOARD
 	sprintf(temp_array, "HW: %s %dMB", PICO_BOARD, BOARD_SIZE);
 #else
-	sprintf(temp_array, "HW: Pico %dMB", PICO_BOARD, BOARD_SIZE);
+	sprintf(temp_array, "HW: Pico %dMB", BOARD_SIZE);
 #endif
 	text_location.x = str_x(strlen(temp_array));
 	text_location.y += 10*font_scale;
