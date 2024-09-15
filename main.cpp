@@ -651,17 +651,17 @@ uint8_t locate_percom(int drive_number) {
 	return r;
 }
 
-/*
+
 bool inline compare_percom(int drive_number) {
 	int i = disk_headers[drive_number-1].atr_header.temp3;
 	if(i & 0x80)
 		return false;
 	i &= 0x3;
-	if(percom_table[i*13] != sector_buffer[0] || !memcmp(&percom_table[i*13+2], &sector_buffer[2], 6))
+	if(percom_table[i*13] != sector_buffer[0] || memcmp(&percom_table[i*13+2], &sector_buffer[2], 6))
 		return false;
 	return true;
 }
-*/
+
 
 FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
 	uint bytes_read;
@@ -1009,7 +1009,7 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	return r;
 }
 
-FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset = 0) {
+FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset = 0, FSIZE_t brpt=1) {
 	FATFS fatfs;
 	FIL fil;
 	FRESULT f_op_stat;
@@ -1025,12 +1025,13 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
 			break;
 		if(op_write) {
-			multicore_lockout_start_blocking();
 			uint32_t ints = save_and_disable_interrupts();
-			f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
+			multicore_lockout_start_blocking();
+			for(uint i=0; i<brpt; i++)
+				f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
 			f_op_stat = f_sync(&fil);
-			restore_interrupts(ints);
 			multicore_lockout_end_blocking();
+			restore_interrupts(ints);
 		} else {
 			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
 
@@ -1456,15 +1457,17 @@ void inline check_and_save_config() {
 	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], 256);
 	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
-	multicore_lockout_start_blocking();
 	uint32_t ints = save_and_disable_interrupts();
+	multicore_lockout_start_blocking();
 	flash_range_erase(flash_save_offset, FLASH_SECTOR_SIZE);
 	flash_range_program(flash_save_offset, (uint8_t *)sector_buffer, sector_buffer_size);
-	restore_interrupts(ints);
 	multicore_lockout_end_blocking();
+	restore_interrupts(ints);
 	save_path_flag = false;
 	save_config_flag = false;
 }
+
+// char txt_buf[25] = {0};
 
 #include "disk_images_data.h"
 
@@ -1731,16 +1734,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'O': // write percom
 					// Only writable disks react to PERCOM write command frame
-					mounts[drive_number].rw = RED;
+					//mounts[drive_number].rw = RED;
 					if((disk_headers[drive_number-1].atr_header.flags & 0x1) || (disk_headers[drive_number-1].atr_header.temp3 & 0x80))
 						r = 'N';
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
 					r = try_receive_data(drive_number, 12);
-					// TODO It seems I have little clue of what the various DOSes might like to write here,
-					// so let's accept anything...
-					//if(r == 'A' && !compare_percom(drive_number))
-					//	r = 'N';
+					//for(i=0;i<12;i++)
+					//	sprintf(&txt_buf[2*i], "%02X", sector_buffer[i]);
+					if(r == 'A' && !compare_percom(drive_number))
+						r = 'N';
 					sleep_us(850);
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
@@ -1749,9 +1752,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					break;
 				case 'P': // put sector
 				case 'W': // write (+verify) sector
-					mounts[drive_number].rw = RED;
 					switch(disk_headers[drive_number-1].atr_header.temp4) {
-						case disk_type_xex:
 						case disk_type_atr:
 							r = check_drive_and_sector_status(drive_number, &offset, &to_read, true);
 							uart_putc_raw(uart1, r);
@@ -1762,6 +1763,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N')
 								break;
+							mounts[drive_number].rw = RED;
+							red_blinks = -1;
+							update_rgb_led(false);
 							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
 								disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 							} else if (sio_command.command_id == 'W') {
@@ -1772,6 +1776,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								}
 							}
 							to_read = 0;
+							red_blinks = 0;
+							update_rgb_led(false);
 							break;
 						case disk_type_atx:
 							sleep_us(us_drive_request_delay);
@@ -1792,6 +1798,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N')
 								break;
+							mounts[drive_number].rw = RED;
+							red_blinks = -1;
+							update_rgb_led(false);
 							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true))
 								f_op_stat = FR_INT_ERR;
 							else if(sio_command.command_id == 'W')
@@ -1802,7 +1811,10 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 
 							to_read = 0;
-							//break;
+							red_blinks = 0;
+							update_rgb_led(false);
+							// break;
+						case disk_type_xex:
 						default:
 							break;
 					}
@@ -1811,7 +1823,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				case '"': // Format ED
 					switch(disk_headers[drive_number-1].atr_header.temp4) {
 					case disk_type_atr:
-						mounts[drive_number].rw = RED;
 						i = sio_command.command_id - 0x21;
 						if( /* !mounts[drive_number].mounted || */
 							(disk_headers[drive_number-1].atr_header.flags & 0x1) ||
@@ -1820,19 +1831,15 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							r = 'N';
 						uart_putc_raw(uart1, r);
 						if(r == 'N') break;
+						mounts[drive_number].rw = RED;
+						red_blinks = -1;
+						update_rgb_led(false);
 						to_read = disk_headers[drive_number-1].atr_header.sec_size;
 						memset(sector_buffer, 0, to_read);
-						offset = mounts[drive_number].status >> 7;
-						for(i=0; i<offset; i++) {
-							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true)) != FR_OK)
-								break;
-							// Give the GUI some time to "breath"
-							// This does not seem to work, buttons are still not responsive
-							// but the write red icon is likely to be more "alive"
-							if(i && i != offset-1 && !(i & 0x3))
-								sleep_ms(20);
-						}
+						f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true,0,mounts[drive_number].status >> 7);
 						sector_buffer[0] = sector_buffer[1] = 0xFF;
+						red_blinks = 0;
+						update_rgb_led(false);
 						break;
 					case disk_type_xex:
 					case disk_type_atx:
@@ -1987,8 +1994,8 @@ ignore_sio_command_frame:
 			if(new_file_boot)
 				memcpy(&sector_buffer[256], dummy_boot, dummy_boot_len);
 			uint32_t bs;
-			multicore_lockout_start_blocking();
 			uint32_t ints = save_and_disable_interrupts();
+			multicore_lockout_start_blocking();
 			do {
 				if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
 					break;
@@ -2033,8 +2040,8 @@ ignore_sio_command_frame:
 			} while(false);
 			f_close(&fil);
 			f_mount(0, "", 1);
-			restore_interrupts(ints);
 			multicore_lockout_end_blocking();
+			restore_interrupts(ints);
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
 		}else {
 			check_and_save_config();
@@ -2975,14 +2982,15 @@ int main() {
 		update_main_menu_buttons();
 
 /*
-		char txt_buf[20];
 		sprintf(txt_buf, " %06d %02X %02X %02X", sampledHeadPosition, disk_headers[0].atr_header.temp2, sector_buffer[0], sector_buffer[88]);
 		text_location.x = 0;
 		text_location.y = 0;
-		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*8);
+		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*16);
 		graphics.set_pen(BG);
 		graphics.rectangle(rt);
 		print_text(txt_buf);
+		text_location.y += 16;
+		print_text(&txt_buf[20]);
 */
 
 		graphics.set_font(&symbol_font);
