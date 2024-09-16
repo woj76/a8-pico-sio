@@ -74,7 +74,7 @@ constexpr std::string_view str_about4{"Inspired by and"};
 constexpr std::string_view str_about5{"based on code of"};
 constexpr std::string_view str_about6{"A8PicoCart"};
 constexpr std::string_view str_about7{"SIO2BSD"};
-constexpr std::string_view str_about8{"SDriveMAX"};
+constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
 constexpr std::string_view str_about11{"Version 0.90"};
@@ -554,7 +554,7 @@ typedef struct {
 	char *str;
 	char *mount_path;
 	bool mounted;
-	Pen rw;
+	// Pen rw;
 	FSIZE_t status;
 } mounts_type;
 
@@ -565,11 +565,11 @@ char d4_mount[256] = {0};
 char c_mount[256] = {0};
 
 mounts_type mounts[] = {
-	{.str=str_cas, .mount_path=c_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=str_d1, .mount_path=d1_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=str_d2, .mount_path=d2_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=str_d3, .mount_path=d3_mount, .mounted=false, .rw=BG, .status = 0},
-	{.str=str_d4, .mount_path=d4_mount, .mounted=false, .rw=BG, .status = 0}
+	{.str=str_cas, .mount_path=c_mount, .mounted=false, /* .rw=BG, */ .status = 0},
+	{.str=str_d1, .mount_path=d1_mount, .mounted=false, /* .rw=BG, */ .status = 0},
+	{.str=str_d2, .mount_path=d2_mount, .mounted=false, /* .rw=BG, */ .status = 0},
+	{.str=str_d3, .mount_path=d3_mount, .mounted=false, /* .rw=BG, */ .status = 0},
+	{.str=str_d4, .mount_path=d4_mount, .mounted=false, /* .rw=BG, */ .status = 0}
 };
 
 const size_t sector_buffer_size = 512;
@@ -1469,6 +1469,14 @@ void inline check_and_save_config() {
 
 // char txt_buf[25] = {0};
 
+volatile int last_drive = -1;
+volatile uint32_t last_drive_access = 0;
+
+void update_last_drive(uint drive_number) {
+	last_drive = drive_number;
+	last_drive_access = to_ms_since_boot(get_absolute_time());
+}
+
 #include "disk_images_data.h"
 
 void main_sio_loop(uint sm, uint sm_turbo) {
@@ -1497,10 +1505,11 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
-					if(!mounts[i].status) {
+					//mounts[i].rw = BG;
+					if(!mounts[i].status)
 						mounts[i].mounted = false;
-						mounts[i].rw = BG;
-					}
+					else if(last_drive == 0)
+							last_drive = -1;
 				} else {
 					uint8_t disk_type = 0;
 					if(f_read(&fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
@@ -1554,22 +1563,25 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						default:
 							break;
 					}
+					// mounts[i].rw = BG;
 					if(!disk_type) {
 						mounts[i].status = 0;
-						mounts[i].rw = BG;
 						mounts[i].mounted = false;
-					} else
+					} else {
 						disk_headers[i-1].atr_header.temp4 = disk_type;
+						if(last_drive == i)
+							last_drive = -1;
+					}
 				}
 				f_close(&fil);
 			}
 			f_mount(0, "", 1);
 			mutex_exit(&fs_lock);
 			if(i) mutex_exit(&mount_lock);
-			if(mounts[i].mounted)
-				green_blinks += 4;
-			else
-				red_blinks += 4;
+			//if(mounts[i].mounted)
+			//	green_blinks += 4;
+			//else
+			//	red_blinks += 4;
 		}
 
 		// command_line_pin, GPIO_IRQ_EDGE_FALL
@@ -1586,7 +1598,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			memset(sector_buffer, 0, sector_buffer_size);
 			blue_blinks = (high_speed == 1) ? -1 : 0;
 			update_rgb_led(false);
-			// last_drive = drive_number;
+			update_last_drive(drive_number);
 			disk_headers[drive_number-1].atr_header.temp1 = 0x0;
 			f_op_stat = FR_OK;
 			to_read = 0;
@@ -1636,12 +1648,14 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					to_read = 12;
 					break;
 				case 'R': // read sector
-					mounts[drive_number].rw = GREEN;
+					// mounts[drive_number].rw = GREEN;
 					switch(disk_headers[drive_number-1].atr_header.temp4) {
 						case disk_type_atr:
 							r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
+							green_blinks = -1;
+							update_rgb_led(false);
 							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read , false)) != FR_OK)
 								disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
 							else
@@ -1651,6 +1665,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							r = check_drive_and_sector_status(drive_number, &offset, &to_read);
 							uart_putc_raw(uart1, r);
 							if(r == 'N') break;
+							green_blinks = -1;
+							update_rgb_led(false);
 							if(sio_command.sector_number >= 0x171) {
 									offset = (sio_command.sector_number-0x171);
 									if(offset == disk_headers[drive_number-1].atr_header.pars - 1) {
@@ -1723,6 +1739,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if (r == 'N')
 								break;
+							green_blinks = -1;
+							update_rgb_led(false);
 							to_read = disk_headers[drive_number-1].atr_header.sec_size;
 							us_pre_ce = 0; // Handled in loadAtxSector
 							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
@@ -1731,6 +1749,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						default:
 							break;
 					}
+					green_blinks = 0;
+					update_rgb_led(false);
 					break;
 				case 'O': // write percom
 					// Only writable disks react to PERCOM write command frame
@@ -1763,7 +1783,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N')
 								break;
-							mounts[drive_number].rw = RED;
+							//mounts[drive_number].rw = RED;
 							red_blinks = -1;
 							update_rgb_led(false);
 							if((f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+offset, to_read, true)) != FR_OK) {
@@ -1776,8 +1796,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								}
 							}
 							to_read = 0;
-							red_blinks = 0;
-							update_rgb_led(false);
 							break;
 						case disk_type_atx:
 							sleep_us(us_drive_request_delay);
@@ -1798,7 +1816,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							uart_putc_raw(uart1, r);
 							if(r == 'N')
 								break;
-							mounts[drive_number].rw = RED;
+							// mounts[drive_number].rw = RED;
 							red_blinks = -1;
 							update_rgb_led(false);
 							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true))
@@ -1811,13 +1829,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 
 							to_read = 0;
-							red_blinks = 0;
-							update_rgb_led(false);
 							// break;
 						case disk_type_xex:
 						default:
 							break;
 					}
+					red_blinks = 0;
+					update_rgb_led(false);
 					break;
 				case '!': // Format SD / PERCOM
 				case '"': // Format ED
@@ -1831,15 +1849,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							r = 'N';
 						uart_putc_raw(uart1, r);
 						if(r == 'N') break;
-						mounts[drive_number].rw = RED;
+						// mounts[drive_number].rw = RED;
 						red_blinks = -1;
 						update_rgb_led(false);
 						to_read = disk_headers[drive_number-1].atr_header.sec_size;
 						memset(sector_buffer, 0, to_read);
 						f_op_stat = mounted_file_transfer(drive_number, sizeof(atr_header_type)+i*128, 128, true,0,mounts[drive_number].status >> 7);
 						sector_buffer[0] = sector_buffer[1] = 0xFF;
-						red_blinks = 0;
-						update_rgb_led(false);
 						break;
 					case disk_type_xex:
 					case disk_type_atx:
@@ -1850,6 +1866,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					default:
 						break;
 					}
+					red_blinks = 0;
+					update_rgb_led(false);
 					break;
 				case '?': // get speed index
 					if(!current_options[hsio_option_index] || disk_headers[drive_number-1].atr_header.temp4 == disk_type_atx)
@@ -1881,7 +1899,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[r] : hsio_opt_to_baud_pal[r]);
 				}
 			}
-			mounts[drive_number].rw = BG;
+			// mounts[drive_number].rw = BG;
 ignore_sio_command_frame:
 			blue_blinks = 0;
 			update_rgb_led(false);
@@ -1889,14 +1907,16 @@ ignore_sio_command_frame:
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
 				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
-			mounts[0].rw = GREEN;
+			// mounts[0].rw = GREEN;
 			to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 			if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
 				mounts[0].mounted = false;
-				mounts[0].rw = BG;
+				//mounts[0].rw = BG;
 				mounts[0].status = 0;
 				continue;
 			}
+			update_last_drive(0);
+			green_blinks = -1;
 			blue_blinks = cas_block_turbo ? -1 : 0;
 			update_rgb_led(false);
 			offset += to_read;
@@ -1970,9 +1990,9 @@ ignore_sio_command_frame:
 					mounts[0].status = offset;
 					if(!offset) {
 						mounts[0].mounted = false;
-						mounts[0].rw = BG;
+						//mounts[0].rw = BG;
 					}
-				}else {
+				}else{
 					blue_blinks = 0;
 					update_rgb_led(false);
 				}
@@ -1982,7 +2002,9 @@ ignore_sio_command_frame:
 					sleep_ms(10);
 				}
 			}
-			mounts[0].rw = BG;
+			// mounts[0].rw = BG;
+			green_blinks = 0;
+			update_rgb_led(false);
 		}else if(create_new_file > 0) {
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
@@ -2444,7 +2466,7 @@ bool mount_file(char *f, int file_entry_index) {
 		mutex_enter_blocking(&mount_lock);
 	}
 	mounts[file_entry_index].mounted = true;
-	mounts[file_entry_index].rw = BG;
+	// mounts[file_entry_index].rw = BG;
 	mounts[file_entry_index].status = 0;
 	strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
 	j = 0;
@@ -2934,13 +2956,16 @@ int main() {
 						memcpy((void *)mounts[i].mount_path, (void *)mounts[i+di].mount_path, 256);
 						mounts[i].mounted = mounts[i+di].mounted;
 						mounts[i].status = 0;
-						mounts[i].rw = BG;
+						// mounts[i].rw = BG;
+
 					}
 					memcpy(&mounts[li].str[3], temp_array, 13);
 					memcpy((void *)mounts[li].mount_path, &temp_array[16], 256);
 					mounts[li].mounted = t;
 					mounts[li].status = 0;
-					mounts[li].rw = BG;
+					// mounts[li].rw = BG;
+					if(last_drive > 0)
+						last_drive = -1;
 					mutex_exit(&mount_lock);
 					cursor_prev = -1;
 				}else if(cursor_position == 8) {
@@ -2959,13 +2984,13 @@ int main() {
 				if(d) mutex_enter_blocking(&mount_lock);
 				if(mounts[d].mounted) {
 					mounts[d].status = 0;
-					mounts[d].rw = BG;
+					//mounts[d].rw = BG;
 					mounts[d].mounted = false;
 				}else{
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
 						mounts[d].status = 0;
-						mounts[d].rw = BG;
+						//mounts[d].rw = BG;
 						if(!d)
 							last_cas_offset = -1;
 					}
@@ -2993,32 +3018,34 @@ int main() {
 		print_text(&txt_buf[20]);
 */
 
+		if(to_ms_since_boot(get_absolute_time()) - last_drive_access > (last_drive == 0 ? 25000 : 2000))
+			last_drive = -1;
+
 		graphics.set_font(&symbol_font);
-		//for(int rpt=0; rpt < 2; rpt++) {
-			for(int i=0; i<5; i++) {
-				d = mount_to_menu[i];
+		for(int i=0; i<5; i++) {
+			d = mount_to_menu[i];
 
-				text_location.x = menu_entries[d].x-10*font_scale;
-				text_location.y = menu_entries[d].y;
-				graphics.set_pen(BG);
-				Rect rr(text_location.x,text_location.y,8*font_scale,8*font_scale);
-				graphics.rectangle(rr);
+			text_location.x = menu_entries[d].x-10*font_scale;
+			text_location.y = menu_entries[d].y;
+			graphics.set_pen(BG);
+			Rect rr(text_location.x,text_location.y,8*font_scale,8*font_scale);
+			graphics.rectangle(rr);
 
-				bool mntd = mounts[i].mounted;
+			bool mntd = mounts[i].mounted;
 
-				graphics.set_pen(mntd ? mounts[i].rw : RED);
-				graphics.text(mntd ? ")" : "-", text_location, st7789.width, 1, 0.0, 0, true);
-				text_location.x += 8;
-				graphics.text(mntd ? "*" : ".", text_location, st7789.width, 1, 0.0, 0, true);
-				text_location.x -= 8;
-				text_location.y += 8;
-				graphics.text(mntd ? "+" : "/", text_location, st7789.width, 1, 0.0, 0, true);
-				text_location.x += 8;
-				graphics.text(mntd ? "," : "0", text_location, st7789.width, 1, 0.0, 0, true);
-			}
-			st7789.update(&graphics);
-			sleep_ms(20);
-		//}
+			graphics.set_pen(mntd ? (i == last_drive ? GREEN : BG) : RED);
+
+			graphics.text(mntd ? ")" : "-", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x += 8;
+			graphics.text(mntd ? "*" : ".", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x -= 8;
+			text_location.y += 8;
+			graphics.text(mntd ? "+" : "/", text_location, st7789.width, 1, 0.0, 0, true);
+			text_location.x += 8;
+			graphics.text(mntd ? "," : "0", text_location, st7789.width, 1, 0.0, 0, true);
+		}
+		st7789.update(&graphics);
+		sleep_ms(20);
 		graphics.set_font(&atari_font);
 	}
 	return 0;
