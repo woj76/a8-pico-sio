@@ -10,140 +10,154 @@
 #include "ff.h"			/* Obtains integer types */
 #include "diskio.h"		/* Declarations of disk functions */
 
-/* Definitions of physical drive number for each drive */
-#define DEV_RAM		0	/* Example: Map Ramdisk to physical drive 0 */
-#define DEV_MMC		1	/* Example: Map MMC/SD card to physical drive 1 */
-#define DEV_USB		2	/* Example: Map USB MSD to physical drive 2 */
+#define DEV_FLASH		0
+#define DEV_SD			1
 
 #include "fatfs_disk.h"
 
-/*-----------------------------------------------------------------------*/
-/* Get Drive Status                                                      */
-/*-----------------------------------------------------------------------*/
+#include "hw_config.h"
+#include "sd_card.h"
 
-DSTATUS disk_status (
-	BYTE pdrv		/* Physical drive nmuber to identify the drive */
-)
-{
-	DSTATUS stat;
-	int result;
-
-	if (pdrv == 0)
-		return 0;
-
-	return STA_NOINIT;
-}
-
-
-
-/*-----------------------------------------------------------------------*/
-/* Inidialize a Drive                                                    */
-/*-----------------------------------------------------------------------*/
-
-DSTATUS disk_initialize (
-	BYTE pdrv				/* Physical drive nmuber to identify the drive */
-)
-{
-	DSTATUS stat;
-	int result;
-
-	if (pdrv == 0)
-	{
-		return 0;
+DSTATUS disk_status (BYTE pdrv) {
+	switch(pdrv) {
+		case DEV_FLASH:
+			return 0;
+		case DEV_SD: {
+			sd_card_t *p_sd = sd_get_by_num(pdrv);
+			if (!p_sd)
+				return RES_PARERR;
+			sd_card_detect(p_sd);
+			return p_sd->m_Status;
+		}
+		default:
+			return STA_NOINIT;
 	}
-	return STA_NOINIT;
 }
 
-
-
-/*-----------------------------------------------------------------------*/
-/* Read Sector(s)                                                        */
-/*-----------------------------------------------------------------------*/
-
-DRESULT disk_read (
-	BYTE pdrv,		/* Physical drive nmuber to identify the drive */
-	BYTE *buff,		/* Data buffer to store read data */
-	LBA_t sector,	/* Start sector in LBA */
-	UINT count		/* Number of sectors to read */
-)
-{
-	DRESULT res;
-	int result;
-
-	if (pdrv == 0)
-	{
-		res = fatfs_disk_read((uint8_t*)buff, sector, count);
-		return res;
+DSTATUS disk_initialize (BYTE pdrv) {
+	switch(pdrv) {
+		case DEV_FLASH:
+			return 0;
+		case DEV_SD: {
+			bool rc = sd_init_driver();
+			if (!rc)
+				return RES_NOTRDY;
+			sd_card_t *p_sd = sd_get_by_num(pdrv);
+			if (!p_sd)
+				return RES_PARERR;
+			return p_sd->init(p_sd);
+		}
+		default:
+			return STA_NOINIT;
 	}
-
-	return RES_PARERR;
 }
 
+static int sdrc2dresult(int sd_rc) {
+	switch (sd_rc) {
+		case SD_BLOCK_DEVICE_ERROR_NONE:
+			return RES_OK;
+		case SD_BLOCK_DEVICE_ERROR_UNUSABLE:
+		case SD_BLOCK_DEVICE_ERROR_NO_RESPONSE:
+		case SD_BLOCK_DEVICE_ERROR_NO_INIT:
+		case SD_BLOCK_DEVICE_ERROR_NO_DEVICE:
+			return RES_NOTRDY;
+		case SD_BLOCK_DEVICE_ERROR_PARAMETER:
+		case SD_BLOCK_DEVICE_ERROR_UNSUPPORTED:
+			return RES_PARERR;
+		case SD_BLOCK_DEVICE_ERROR_WRITE_PROTECTED:
+			return RES_WRPRT;
+		case SD_BLOCK_DEVICE_ERROR_CRC:
+		case SD_BLOCK_DEVICE_ERROR_WOULD_BLOCK:
+		case SD_BLOCK_DEVICE_ERROR_ERASE:
+		case SD_BLOCK_DEVICE_ERROR_WRITE:
+		default:
+			return RES_ERROR;
+	}
+}
 
-
-/*-----------------------------------------------------------------------*/
-/* Write Sector(s)                                                       */
-/*-----------------------------------------------------------------------*/
+DRESULT disk_read (BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
+	switch(pdrv) {
+		case DEV_FLASH:
+			return fatfs_disk_read((uint8_t*)buff, sector, count);
+		case DEV_SD: {
+			sd_card_t *p_sd = sd_get_by_num(pdrv);
+			if (!p_sd)
+				return RES_PARERR;
+			int rc = p_sd->read_blocks(p_sd, buff, sector, count);
+			return sdrc2dresult(rc);
+		}
+		default:
+			return RES_PARERR;
+	}
+}
 
 #if FF_FS_READONLY == 0
 
-DRESULT disk_write (
-	BYTE pdrv,			/* Physical drive nmuber to identify the drive */
-	const BYTE *buff,	/* Data to be written */
-	LBA_t sector,		/* Start sector in LBA */
-	UINT count			/* Number of sectors to write */
-)
-{
-	DRESULT res;
-	int result;
-
-	if (pdrv == 0)
-	{
-		res = fatfs_disk_write((const uint8_t*)buff, sector, count);
-		return res;
+DRESULT disk_write (BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
+	switch(pdrv) {
+		case DEV_FLASH:
+			return fatfs_disk_write((const uint8_t*)buff, sector, count);
+		case DEV_SD: {
+			sd_card_t *p_sd = sd_get_by_num(pdrv);
+			if (!p_sd)
+				return RES_PARERR;
+				int rc = p_sd->write_blocks(p_sd, buff, sector, count);
+			return sdrc2dresult(rc);
+		}
+		default:
+			return RES_PARERR;
 	}
-
-	return RES_PARERR;
 }
 
 #endif
 
+DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void *buff) {
 
-/*-----------------------------------------------------------------------*/
-/* Miscellaneous Functions                                               */
-/*-----------------------------------------------------------------------*/
-
-DRESULT disk_ioctl (
-	BYTE pdrv,		/* Physical drive nmuber (0..) */
-	BYTE cmd,		/* Control code */
-	void *buff		/* Buffer to send/receive control data */
-)
-{
-	DRESULT res;
-	int result;
-
-	if (pdrv == 0)
-	{
-		switch(cmd) {
-			case CTRL_SYNC:
-				fatfs_disk_sync();
-				return RES_OK;
-			case GET_SECTOR_COUNT:
-				*(LBA_t*) buff = SECTOR_NUM;
-				return RES_OK;
-			case GET_SECTOR_SIZE:
-				*(WORD*) buff = SECTOR_SIZE;
-				return RES_OK;
-			case GET_BLOCK_SIZE:
-				*(DWORD*) buff = 1;
-				return RES_OK;
-			case CTRL_TRIM:
-				return RES_OK;
-			default:
-				return RES_PARERR;
+	switch(pdrv) {
+		case DEV_FLASH:
+			switch(cmd) {
+				case CTRL_SYNC:
+					fatfs_disk_sync();
+					return RES_OK;
+				case GET_SECTOR_COUNT:
+					*(LBA_t*) buff = SECTOR_NUM;
+					return RES_OK;
+				case GET_SECTOR_SIZE:
+					*(WORD*) buff = SECTOR_SIZE;
+					return RES_OK;
+				case GET_BLOCK_SIZE:
+					*(DWORD*) buff = 1;
+					return RES_OK;
+				case CTRL_TRIM:
+					return RES_OK;
+				default:
+					return RES_PARERR;
 		}
+		case DEV_SD: {
+			sd_card_t *p_sd = sd_get_by_num(pdrv);
+			if (!p_sd)
+				return RES_PARERR;
+			switch (cmd) {
+				case GET_SECTOR_COUNT: {
+					static LBA_t n;
+					n = sd_sectors(p_sd);
+					*(LBA_t *)buff = n;
+					if (!n)
+						return RES_ERROR;
+					return RES_OK;
+				}
+				case GET_BLOCK_SIZE: {
+					static DWORD bs = 1;
+					*(DWORD *)buff = bs;
+					return RES_OK;
+				}
+				case CTRL_SYNC:
+					return RES_OK;
+				default:
+					return RES_PARERR;
+			}
+		}
+		default:
+			return RES_PARERR;
 	}
-
-	return RES_PARERR;
 }
-

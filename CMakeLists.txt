@@ -33,9 +33,14 @@ target_sources(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/msc_disk.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs_disk.c
     ${CMAKE_CURRENT_LIST_DIR}/flash_fs.c
+    ${CMAKE_CURRENT_LIST_DIR}/hw_config.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/diskio.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/ff.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/ffunicode.c
+    ${CMAKE_CURRENT_LIST_DIR}/sd_driver/crc.c
+    ${CMAKE_CURRENT_LIST_DIR}/sd_driver/sd_card.c
+    ${CMAKE_CURRENT_LIST_DIR}/sd_driver/sd_spi.c
+    ${CMAKE_CURRENT_LIST_DIR}/sd_driver/spi.c
     # ffsystem.c is not used
 )
 
@@ -45,6 +50,7 @@ pico_generate_pio_header(a8_pico_sio ${CMAKE_CURRENT_LIST_DIR}/disk_counter.pio)
 target_include_directories(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/fatfs
+    ${CMAKE_CURRENT_LIST_DIR}/sd_driver
 )
 
 target_link_libraries(a8_pico_sio PUBLIC pico_stdlib pico_rand pico_multicore hardware_pio hardware_uart hardware_flash tinyusb_device hardware_dma hardware_irq hardware_spi hardware_pwm hardware_dma rgbled button pico_graphics pico_display_2 st7789)

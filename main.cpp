@@ -463,7 +463,7 @@ int32_t read_directory(int32_t page_index, int page_size) {
 	add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
 
 	mutex_enter_blocking(&fs_lock);
-	if (f_mount(&fatfs, "", 1) == FR_OK) {
+	if (f_mount(&fatfs, "0:", 1) == FR_OK) {
 		if (f_opendir(&dir, curr_path) == FR_OK) {
 			ret = 0;
 			uint16_t dir_index = -1;
@@ -519,7 +519,7 @@ int32_t read_directory(int32_t page_index, int page_size) {
 			}
 			f_closedir(&dir);
 		}
-		f_mount(0, "", 1);
+		f_mount(0, "0:", 1);
 	}
 	mutex_exit(&fs_lock);
 	// sleep_ms(2000); // For testing
@@ -748,16 +748,17 @@ cas_read_forward_exit:
 	return offset;
 }
 
-// const uint turbo_data_pin = 25; // LED=25 for testing
-const uint joy2_p3_pin = 2;
-const uint joy2_p4_pin = 3;
-const uint joy2_p1_pin = 22;
+// const uint led_pin = 25;
+
+const uint sio_tx_pin = 4;
+const uint sio_rx_pin = 5;
 const uint normal_motor_pin = 10;
 const uint command_line_pin = 11;
 const uint proceed_pin = 21;
-const uint interrupt_pin = 26;
-const uint sio_tx_pin = 4;
-const uint sio_rx_pin = 5;
+const uint interrupt_pin = 22;
+const uint joy2_p1_pin = 26;
+const uint joy2_p3_pin = 27;
+const uint joy2_p4_pin = 28;
 
 // Conventional SIO, but also Turbo D & Turbo 6000
 const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin);
@@ -1018,7 +1019,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 
 	mutex_enter_blocking(&fs_lock);
 	do {
-		if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+		if((f_op_stat = f_mount(&fatfs, "0:", 1)) != FR_OK)
 			break;
 		if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
 			break;
@@ -1043,7 +1044,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 			f_op_stat = FR_INT_ERR;
 	}while(false);
 	f_close(&fil);
-	f_mount(0, "", 1);
+	f_mount(0, "0:", 1);
 	mutex_exit(&fs_lock);
 	return f_op_stat;
 }
@@ -1496,7 +1497,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				continue;
 			}
 			mutex_enter_blocking(&fs_lock);
-			if(f_mount(&fatfs, "", 1) == FR_OK && f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+			if(f_mount(&fatfs, "0:", 1) == FR_OK && f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
 					check_turbo_conf();
 					cas_sample_duration = timing_base_clock/600;
@@ -1575,7 +1576,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				f_close(&fil);
 			}
-			f_mount(0, "", 1);
+			f_mount(0, "0:", 1);
 			mutex_exit(&fs_lock);
 			if(i) mutex_exit(&mount_lock);
 			//if(mounts[i].mounted)
@@ -1981,11 +1982,11 @@ ignore_sio_command_frame:
 			if(cas_block_index == cas_header.chunk_length) {
 				if(offset < cas_size && mounts[0].mounted) {
 					mutex_enter_blocking(&fs_lock);
-					if(f_mount(&fatfs, "", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+					if(f_mount(&fatfs, "0:", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
 						offset = cas_read_forward(&fil, offset);
 					}
 					f_close(&fil);
-					f_mount(0, "", 1);
+					f_mount(0, "0:", 1);
 					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
 					if(!offset) {
@@ -2019,7 +2020,7 @@ ignore_sio_command_frame:
 			uint32_t ints = save_and_disable_interrupts();
 			multicore_lockout_start_blocking();
 			do {
-				if((f_op_stat = f_mount(&fatfs, "", 1)) != FR_OK)
+				if((f_op_stat = f_mount(&fatfs, "0:", 1)) != FR_OK)
 					break;
 #if FF_MAX_SS != FF_MIN_SS
 				bs = fatfs.csize * fatfs.ssize;
@@ -2061,7 +2062,7 @@ ignore_sio_command_frame:
 				f_op_stat = f_write(&fil, &sector_buffer[256], dummy_boot_len, &ind);
 			} while(false);
 			f_close(&fil);
-			f_mount(0, "", 1);
+			f_mount(0, "0:", 1);
 			multicore_lockout_end_blocking();
 			restore_interrupts(ints);
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
@@ -2588,7 +2589,7 @@ void get_file(int file_entry_index) {
 						FATFS fatfs;
 						int fn = 0;
 						mutex_enter_blocking(&fs_lock);
-						if(f_mount(&fatfs, "", 1) == FR_OK) {
+						if(f_mount(&fatfs, "0:", 1) == FR_OK) {
 							for(; fn < 10000; fn++) {
 								sprintf(&curr_path[i], "DISK%04d.ATR", fn);
 								if(f_stat(curr_path, &fil_info) != FR_OK) {
@@ -2597,7 +2598,7 @@ void get_file(int file_entry_index) {
 								}
 							}
 						}
-						f_mount(0, "", 1);
+						f_mount(0, "0:", 1);
 						mutex_exit(&fs_lock);
 						if(fn == 10001) {
 							graphics.set_pen(BG); graphics.rectangle(scroll_bar);

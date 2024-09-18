@@ -133,6 +133,7 @@
 /  ff_memfree() exemplified in ffsystem.c, need to be added to the project. */
 
 
+// TODO try 2?
 #define FF_LFN_UNICODE	0
 /* This option switches the character encoding on the API when LFN is enabled.
 /
@@ -166,7 +167,8 @@
 / Drive/Volume Configurations
 /---------------------------------------------------------------------------*/
 
-#define FF_VOLUMES		1
+// TODO was 1
+#define FF_VOLUMES		2
 /* Number of volumes (logical drives) to be used. (1-10) */
 
 
@@ -202,8 +204,8 @@
 /  for variable sector size mode and disk_ioctl() function needs to implement
 /  GET_SECTOR_SIZE command. */
 
-
-#define FF_LBA64		0
+// TODO Was 0, probably needed for SD card
+#define FF_LBA64		1
 /* This option switches support for 64-bit LBA. (0:Disable or 1:Enable)
 /  To enable the 64-bit LBA, also exFAT needs to be enabled. (FF_FS_EXFAT == 1) */
 
@@ -231,7 +233,8 @@
 /  buffer in the filesystem object (FATFS) is used for the file data transfer. */
 
 
-#define FF_FS_EXFAT		0
+// TODO Was 0, probably needed for SD card
+#define FF_FS_EXFAT		1
 /* This option switches support for exFAT filesystem. (0:Disable or 1:Enable)
 /  To enable exFAT, also LFN needs to be enabled. (FF_USE_LFN >= 1)
 /  Note that enabling exFAT discards ANSI C (C89) compatibility. */
@@ -240,7 +243,7 @@
 #define FF_FS_NORTC		1
 #define FF_NORTC_MON	1
 #define FF_NORTC_MDAY	1
-#define FF_NORTC_YEAR	2023
+#define FF_NORTC_YEAR	2024
 /* The option FF_FS_NORTC switches timestamp feature. If the system does not have
 /  an RTC or valid timestamp is not needed, set FF_FS_NORTC = 1 to disable the
 /  timestamp feature. Every object modified by FatFs will have a fixed timestamp
