@@ -34,7 +34,7 @@ typedef struct sd_card_t sd_card_t;
 
 // "Class" representing SD Cards
 struct sd_card_t {
-    const char *pcName;
+    // const char *pcName;
     spi_t *spi;
     // Slave select is here instead of in spi_t because multiple SDs can share an SPI.
     uint ss_gpio;                   // Slave select for this SD card
@@ -52,7 +52,7 @@ struct sd_card_t {
     uint64_t sectors;                                // Assigned dynamically
     int card_type;                                   // Assigned dynamically
     mutex_t mutex;
-    FATFS fatfs;
+    // FATFS fatfs;
     bool mounted;
 
     int (*init)(sd_card_t *sd_card_p);
@@ -91,7 +91,7 @@ bool sd_card_detect(sd_card_t *pSD);
 uint64_t sd_sectors(sd_card_t *pSD);
 
 bool sd_init_driver();
-bool sd_card_detect(sd_card_t *sd_card_p);
+// bool sd_card_detect(sd_card_t *sd_card_p);
 
 #ifdef __cplusplus
 }

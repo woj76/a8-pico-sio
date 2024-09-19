@@ -101,11 +101,19 @@ Point text_location(str_x(str_press_2.size()+2), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
 
+/*
 Button
 	button_a(PicoDisplay2::A),
 	button_b(PicoDisplay2::B),
 	button_x(PicoDisplay2::X),
 	button_y(PicoDisplay2::Y);
+*/
+
+Button
+	button_a(0),
+	button_b(1),
+	button_x(2),
+	button_y(3);
 
 const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
@@ -393,8 +401,12 @@ const option_list option_lists[] = {
 };
 
 uint8_t current_options[option_count-1] = {0};
-char curr_path[256+16] = {0};
+char curr_path[2+256+16];
 size_t num_files, num_files_page;
+
+volatile uint8_t sd_card_present = 0;
+
+const char * const volume_names[] = {"0:", "1:"};
 
 char temp_array[256+16];
 volatile int16_t create_new_file = 0;
@@ -455,7 +467,8 @@ uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with
 // param page_index signed int, -1 count only
 // result -1 error, otherwise files read / counted
 int32_t read_directory(int32_t page_index, int page_size) {
-	FATFS fatfs; FILINFO fno; DIR dir;
+	//FATFS fatfs;
+	FILINFO fno; DIR dir;
 	int32_t ret = -1;
 
 	loading_pg.init();
@@ -463,7 +476,7 @@ int32_t read_directory(int32_t page_index, int page_size) {
 	add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
 
 	mutex_enter_blocking(&fs_lock);
-	if (f_mount(&fatfs, "0:", 1) == FR_OK) {
+	//if (f_mount(&fatfs, volume_names[sd_card_present], 1) == FR_OK) {
 		if (f_opendir(&dir, curr_path) == FR_OK) {
 			ret = 0;
 			uint16_t dir_index = -1;
@@ -519,8 +532,8 @@ int32_t read_directory(int32_t page_index, int page_size) {
 			}
 			f_closedir(&dir);
 		}
-		f_mount(0, "0:", 1);
-	}
+		// f_mount(0, volume_names[sd_card_present], 1);
+	//}
 	mutex_exit(&fs_lock);
 	// sleep_ms(2000); // For testing
 	cancel_repeating_timer(&timer);
@@ -1011,7 +1024,7 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 }
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset = 0, FSIZE_t brpt=1) {
-	FATFS fatfs;
+	//FATFS fatfs;
 	FIL fil;
 	FRESULT f_op_stat;
 	uint bytes_transferred;
@@ -1019,20 +1032,25 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 
 	mutex_enter_blocking(&fs_lock);
 	do {
-		if((f_op_stat = f_mount(&fatfs, "0:", 1)) != FR_OK)
-			break;
+		//if((f_op_stat = f_mount(&fatfs, volume_names[sd_card_present], 1)) != FR_OK)
+		//	break;
 		if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
 			break;
 		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
 			break;
 		if(op_write) {
-			uint32_t ints = save_and_disable_interrupts();
-			multicore_lockout_start_blocking();
+			uint32_t ints;
+			if(!sd_card_present) {
+				ints = save_and_disable_interrupts();
+				multicore_lockout_start_blocking();
+			}
 			for(uint i=0; i<brpt; i++)
 				f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
 			f_op_stat = f_sync(&fil);
-			multicore_lockout_end_blocking();
-			restore_interrupts(ints);
+			if(!sd_card_present){
+				multicore_lockout_end_blocking();
+				restore_interrupts(ints);
+			}
 		} else {
 			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
 
@@ -1044,7 +1062,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 			f_op_stat = FR_INT_ERR;
 	}while(false);
 	f_close(&fil);
-	f_mount(0, "0:", 1);
+	//f_mount(0, volume_names[sd_card_present], 1);
 	mutex_exit(&fs_lock);
 	return f_op_stat;
 }
@@ -1364,11 +1382,12 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 					sleep_us((2*tgtTrackNumber+1)*us_track_step_1050+us_head_settle_1050);
 		}
 
+		//headPosition = getCurrentHeadPosition();
+		getCurrentHeadPosition(&headPosition);
+
 		if(!*status || (op_write && tgtSectorOffset))
 			break;
 
-		//headPosition = getCurrentHeadPosition();
-		getCurrentHeadPosition(&headPosition);
 	}
 
 	*status &= ~(mask_reserved | mask_extended_data);
@@ -1403,7 +1422,8 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 				sector_buffer[ri+i] = (uint8_t) get_rand_32();
 		// Do not wait if we are doing a verify after write (no data to be sent back)
 		if(!ri)
-			sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
+			sleep_until(delayed_by_us(headPosition.stamp, is1050 ? us_cs_calculation_1050 : us_cs_calculation_810));
+			//sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
 	}else if(tgtSectorOffset) {
 		if(writeStatusOffset) {
 			sector_buffer[si] = *status;
@@ -1470,6 +1490,8 @@ void inline check_and_save_config() {
 
 // char txt_buf[25] = {0};
 
+FATFS fatfs;
+
 volatile int last_drive = -1;
 volatile uint32_t last_drive_access = 0;
 
@@ -1481,7 +1503,7 @@ void update_last_drive(uint drive_number) {
 #include "disk_images_data.h"
 
 void main_sio_loop(uint sm, uint sm_turbo) {
-	FATFS fatfs;
+	//FATFS fatfs;
 	FIL fil;
 	FILINFO fil_info;
 	FSIZE_t offset;
@@ -1497,7 +1519,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				continue;
 			}
 			mutex_enter_blocking(&fs_lock);
-			if(f_mount(&fatfs, "0:", 1) == FR_OK && f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+			if(/* f_mount(&fatfs, volume_names[sd_card_present], 1) == FR_OK && */ f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
 					check_turbo_conf();
 					cas_sample_duration = timing_base_clock/600;
@@ -1576,7 +1598,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				}
 				f_close(&fil);
 			}
-			f_mount(0, "0:", 1);
+			//f_mount(0, volume_names[sd_card_present], 1);
 			mutex_exit(&fs_lock);
 			if(i) mutex_exit(&mount_lock);
 			//if(mounts[i].mounted)
@@ -1982,11 +2004,11 @@ ignore_sio_command_frame:
 			if(cas_block_index == cas_header.chunk_length) {
 				if(offset < cas_size && mounts[0].mounted) {
 					mutex_enter_blocking(&fs_lock);
-					if(f_mount(&fatfs, "0:", 1) == FR_OK && f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+					if(/* f_mount(&fatfs, volume_names[sd_card_present], 1) == FR_OK && */ f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
 						offset = cas_read_forward(&fil, offset);
 					}
 					f_close(&fil);
-					f_mount(0, "0:", 1);
+					// f_mount(0, volume_names[sd_card_present], 1);
 					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
 					if(!offset) {
@@ -2020,8 +2042,8 @@ ignore_sio_command_frame:
 			uint32_t ints = save_and_disable_interrupts();
 			multicore_lockout_start_blocking();
 			do {
-				if((f_op_stat = f_mount(&fatfs, "0:", 1)) != FR_OK)
-					break;
+				//if((f_op_stat = f_mount(&fatfs, volume_names[sd_card_present], 1)) != FR_OK)
+				//	break;
 #if FF_MAX_SS != FF_MIN_SS
 				bs = fatfs.csize * fatfs.ssize;
 #else
@@ -2062,7 +2084,7 @@ ignore_sio_command_frame:
 				f_op_stat = f_write(&fil, &sector_buffer[256], dummy_boot_len, &ind);
 			} while(false);
 			f_close(&fil);
-			f_mount(0, "0:", 1);
+			//f_mount(0, volume_names[sd_card_present], 1);
 			multicore_lockout_end_blocking();
 			restore_interrupts(ints);
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
@@ -2492,8 +2514,8 @@ void get_file(int file_entry_index) {
 	while(true) {
 		//loading_pg.init();
 		int32_t r = read_directory(-1, 0);
-		if(r < 0 && curr_path[0]) {
-			curr_path[0] = 0;
+		if(r < 0 && curr_path[2]) {
+			curr_path[2] = 0;
 			r = read_directory(-1, 0);
 		}
 		graphics.set_pen(BG); graphics.clear();
@@ -2508,7 +2530,7 @@ void get_file(int file_entry_index) {
 			goto get_file_exit;
 		}
 		num_files = r;
-		int shift_index = (curr_path[0] ? 1 : 0) + (ft == file_type::disk ? 1 : 0);
+		int shift_index = (curr_path[2] ? 1 : 0) + (ft == file_type::disk ? 1 : 0);
 		update_buttons(main_buttons, main_buttons_size);
 
 		if(!num_files) {
@@ -2581,15 +2603,15 @@ void get_file(int file_entry_index) {
 						// cursor_position = 0;
 						cursor_prev = -1;
 						i -= 2;
-						while(curr_path[i] != '/' && i) i--;
+						while(curr_path[i] != '/' && i > 2) i--;
 						curr_path[i] = 0;
 						break;
 					} else {
 						FILINFO fil_info;
-						FATFS fatfs;
+						//FATFS fatfs;
 						int fn = 0;
 						mutex_enter_blocking(&fs_lock);
-						if(f_mount(&fatfs, "0:", 1) == FR_OK) {
+						//if(f_mount(&fatfs, volume_names[sd_card_present], 1) == FR_OK) {
 							for(; fn < 10000; fn++) {
 								sprintf(&curr_path[i], "DISK%04d.ATR", fn);
 								if(f_stat(curr_path, &fil_info) != FR_OK) {
@@ -2597,8 +2619,8 @@ void get_file(int file_entry_index) {
 									fn = 10000;
 								}
 							}
-						}
-						f_mount(0, "0:", 1);
+						//}
+						//f_mount(0, volume_names[sd_card_present], 1);
 						mutex_exit(&fs_lock);
 						if(fn == 10001) {
 							graphics.set_pen(BG); graphics.rectangle(scroll_bar);
@@ -2650,6 +2672,7 @@ void get_file(int file_entry_index) {
 					} else {
 						strcpy(&curr_path[i], f);
 						if(!mount_file(f, file_entry_index))
+							// TODO remove?
 							red_blinks = 6;
 						curr_path[i] = 0;
 						goto get_file_exit;
@@ -2923,7 +2946,17 @@ int main() {
 
 	check_and_load_config(b_pressed);
 
-	tud_mount_cb();
+
+	if(f_mount(&fatfs, volume_names[1], 1) == FR_OK) {
+		sd_card_present = 1;
+		//f_mount(0, volume_names[1], 1);
+	}
+	if(!sd_card_present) {
+		tud_mount_cb();
+		f_mount(&fatfs, volume_names[0], 1);
+	}
+	strcpy(curr_path, volume_names[sd_card_present]);
+
 	multicore_launch_core1(core1_entry);
 	// bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS;
 	update_main_menu();
