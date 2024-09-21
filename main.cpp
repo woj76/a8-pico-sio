@@ -408,7 +408,7 @@ volatile uint8_t sd_card_present = 0;
 
 const char * const volume_names[] = {"0:", "1:"};
 
-char temp_array[256+16];
+char temp_array[2+256+16];
 volatile int16_t create_new_file = 0;
 
 typedef struct  __attribute__((__packed__)) {
@@ -470,6 +470,17 @@ int32_t read_directory(int32_t page_index, int page_size) {
 	//FATFS fatfs;
 	FILINFO fno; DIR dir;
 	int32_t ret = -1;
+
+	if(!curr_path[0]) {
+		int i;
+		for(i=0;i<sd_card_present+1;i++) {
+			strcpy(file_entries[i].short_name, volume_names[i]);
+			strcpy(file_entries[i].long_name, volume_names[i]);
+			file_entries[i].dir = true;
+			file_entries[i].dir_index = i;
+		}
+		return i;
+	}
 
 	loading_pg.init();
 	struct repeating_timer timer;
@@ -1038,16 +1049,17 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 			break;
 		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
 			break;
+		uint vol_num = mounts[drive_number].mount_path[0] - '0';
 		if(op_write) {
 			uint32_t ints;
-			if(!sd_card_present) {
+			if(!vol_num) {
 				ints = save_and_disable_interrupts();
 				multicore_lockout_start_blocking();
 			}
 			for(uint i=0; i<brpt; i++)
 				f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
 			f_op_stat = f_sync(&fil);
-			if(!sd_card_present){
+			if(!vol_num){
 				multicore_lockout_end_blocking();
 				restore_interrupts(ints);
 			}
@@ -1504,7 +1516,7 @@ void inline check_and_save_config() {
 
 // char txt_buf[25] = {0};
 
-FATFS fatfs;
+FATFS fatfs[2];
 
 volatile int last_drive = -1;
 volatile uint32_t last_drive_access = 0;
@@ -2054,19 +2066,23 @@ ignore_sio_command_frame:
 			if(new_file_boot)
 				memcpy(&sector_buffer[256], dummy_boot, dummy_boot_len);
 			uint32_t bs;
-			uint32_t ints = save_and_disable_interrupts();
-			multicore_lockout_start_blocking();
+			uint32_t ints;
+			uint vol_num = temp_array[0]-'0';
+			if(!vol_num) {
+				ints = save_and_disable_interrupts();
+				multicore_lockout_start_blocking();
+			}
 			do {
 				//if((f_op_stat = f_mount(&fatfs, volume_names[sd_card_present], 1)) != FR_OK)
 				//	break;
 #if FF_MAX_SS != FF_MIN_SS
-				bs = fatfs.csize * fatfs.ssize;
+				bs = fatfs[vol_num].csize * fatfs[vol_num].ssize;
 #else
-				bs = fatfs.csize * FF_MAX_SS;
+				bs = fatfs[vol_num].csize * FF_MAX_SS;
 #endif
 				image_size = (image_size + bs - 1) / bs;
 				FATFS *ff;
-				if((f_op_stat = f_getfree("", &bs, &ff)) != FR_OK)
+				if((f_op_stat = f_getfree(temp_array, &bs, &ff)) != FR_OK)
 					break;
 				if(bs < image_size) {
 					f_op_stat = FR_INT_ERR;
@@ -2100,8 +2116,10 @@ ignore_sio_command_frame:
 			} while(false);
 			f_close(&fil);
 			//f_mount(0, volume_names[sd_card_present], 1);
-			multicore_lockout_end_blocking();
-			restore_interrupts(ints);
+			if(!vol_num) {
+				multicore_lockout_end_blocking();
+				restore_interrupts(ints);
+			}
 			create_new_file = (f_op_stat != FR_OK) ? -1 : 0;
 		}else {
 			check_and_save_config();
@@ -2361,31 +2379,55 @@ void update_one_display_file(int i, int fi) {
 		delete ptr_str_file_name;
 }
 
+const char *drive_labels[] = {"Int. Flash:", "SD Card:"};
+
+void update_one_display_file2(int page_index, int shift_index, int i) {
+	if(!curr_path[0]) {
+		print_text(drive_labels[i], (i == cursor_position) ? 12 : 0);
+	} else if(!page_index && i < shift_index) {
+		bool new_image_label = (!i && ft == file_type::disk);
+		const std::string_view& s = new_image_label ? str_new_image : str_up_dir;
+		if(new_image_label) {
+			text_location.y -= 8*font_scale;
+			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
+			graphics.set_pen(BG); graphics.rectangle(r);
+		}
+		print_text(s, (i == cursor_position) ? s.size() : 0);
+	}else
+		update_one_display_file(i, i-shift_index);
+}
+
 void update_display_files(int page_index, int shift_index) {
 	scroll_length = 0;
 	text_location.x = (3*8+4)*font_scale;
 	if(cursor_prev == -1) {
-		Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,(num_files ? files_per_page : 2)*8*font_scale);
+		Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,(num_files ? files_per_page+1 : 2)*8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
 		for(int i = 0; i < num_files_page; i++) {
-			text_location.y = 8*(1+i)*font_scale;
+			text_location.y = 8*(2+i)*font_scale;
+			update_one_display_file2(page_index, shift_index, i);
+/*
 			if(!page_index && i < shift_index) {
 				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
 				print_text(s, (i == cursor_position) ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
+*/
 		}
 	}else{
 		int i = cursor_prev;
 		while(true) {
-			text_location.y = 8*(1+i)*font_scale;
+			text_location.y = 8*(2+i)*font_scale;
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
+			update_one_display_file2(page_index, shift_index, i);
+/*
 			if(!page_index && i < shift_index) {
 				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
 				print_text(s, i == cursor_position ? s.size() : 0);
 			} else
 				update_one_display_file(i, i-shift_index);
+*/
 			if(i == cursor_position)
 				break;
 			i = cursor_position;
@@ -2522,7 +2564,7 @@ void get_file(int file_entry_index) {
 	int saved_cursor_position = cursor_position;
 
 	cursor_prev = -1;
-	cursor_position = (ft == file_type::disk) ? 1 : 0;
+	cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
 	int page_index = 0;
 
 	main_buttons[0].str = &char_left;
@@ -2530,8 +2572,11 @@ void get_file(int file_entry_index) {
 	while(true) {
 		//loading_pg.init();
 		int32_t r = read_directory(-1, 0);
-		if(r < 0 && curr_path[2]) {
-			curr_path[2] = 0;
+		if(r < 0 && curr_path[0]) {
+			if(sd_card_present)
+				curr_path[0] = 0;
+			else
+				strcpy(curr_path, volume_names[0]);
 			r = read_directory(-1, 0);
 		}
 		graphics.set_pen(BG); graphics.clear();
@@ -2546,7 +2591,7 @@ void get_file(int file_entry_index) {
 			goto get_file_exit;
 		}
 		num_files = r;
-		int shift_index = (curr_path[2] ? 1 : 0) + (ft == file_type::disk ? 1 : 0);
+		int shift_index = (curr_path[0] ? 1 : 0) + (ft == file_type::disk && curr_path[0] ? 1 : 0);
 		update_buttons(main_buttons, main_buttons_size);
 
 		if(!num_files) {
@@ -2616,11 +2661,11 @@ void get_file(int file_entry_index) {
 				if(fi < 0) {
 					if(cursor_position == (ft == file_type::disk ? 1 : 0)) {
 						page_index = 0;
-						// cursor_position = 0;
 						cursor_prev = -1;
-						i -= 2;
-						while(curr_path[i] != '/' && i > 2) i--;
+						i--;
+						while(curr_path[i-1] != '/' && curr_path[i-1] != ':' && i > 0) i--;
 						curr_path[i] = 0;
+						cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
 						break;
 					} else {
 						FILINFO fil_info;
@@ -2682,8 +2727,8 @@ void get_file(int file_entry_index) {
 					if(file_entries[fi].dir) {
 						page_index = 0;
 						cursor_prev = -1;
-						cursor_position = (ft == file_type::disk) ? 1 : 0;
 						strcpy(&curr_path[i], f);
+						cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
 						break;
 					} else {
 						strcpy(&curr_path[i], f);
@@ -2962,16 +3007,20 @@ int main() {
 
 	check_and_load_config(b_pressed);
 
+	tud_mount_cb();
+	f_mount(&fatfs[0], volume_names[0], 1);
 
-	if(f_mount(&fatfs, volume_names[1], 1) == FR_OK) {
+	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
+		green_blinks = 4;
 		sd_card_present = 1;
-		//f_mount(0, volume_names[1], 1);
-	}
-	if(!sd_card_present) {
-		tud_mount_cb();
-		f_mount(&fatfs, volume_names[0], 1);
-	}
-	strcpy(curr_path, volume_names[sd_card_present]);
+	}else
+		blue_blinks = 4;
+
+	// TODO check and load config?
+	if(sd_card_present)
+		curr_path[0] = 0;
+	else
+		strcpy(curr_path, volume_names[0]);
 
 	multicore_launch_core1(core1_entry);
 	// bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS;
