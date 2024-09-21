@@ -35,7 +35,7 @@ typedef struct {
     uint mosi_gpio;
     uint sck_gpio;
     uint baud_rate;
-    uint DMA_IRQ_num; // DMA_IRQ_0 or DMA_IRQ_1
+    // uint DMA_IRQ_num; // DMA_IRQ_0 or DMA_IRQ_1
 
     // Drive strength levels for GPIO outputs.
     // enum gpio_drive_strength { GPIO_DRIVE_STRENGTH_2MA = 0, GPIO_DRIVE_STRENGTH_4MA = 1, GPIO_DRIVE_STRENGTH_8MA = 2,
@@ -49,27 +49,27 @@ typedef struct {
     uint rx_dma;
     dma_channel_config tx_dma_cfg;
     dma_channel_config rx_dma_cfg;
-    irq_handler_t dma_isr; // Ignored: no longer used
-    bool initialized;  
-    semaphore_t sem;
-    mutex_t mutex;    
+    //irq_handler_t dma_isr; // Ignored: no longer used
+    bool initialized;
+    //semaphore_t sem;
+    mutex_t mutex;
 } spi_t;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-  
-bool __not_in_flash_func(spi_transfer)(spi_t *pSPI, const uint8_t *tx, uint8_t *rx, size_t length);  
+
+//bool __not_in_flash_func(spi_transfer)(spi_t *pSPI, const uint8_t *tx, uint8_t *rx, size_t length);
+bool spi_transfer(spi_t *pSPI, const uint8_t *tx, uint8_t *rx, size_t length);
 void spi_lock(spi_t *pSPI);
 void spi_unlock(spi_t *pSPI);
 bool my_spi_init(spi_t *pSPI);
-void set_spi_dma_irq_channel(bool useChannel1, bool shared);
 
 #ifdef __cplusplus
 }
 #endif
 
-/* 
+/*
 This uses the Pico LED to show SD card activity.
 You can use it to get a rough idea of utilization.
 Warning: Pico W uses GPIO 25 for SPI communication to the CYW43439.

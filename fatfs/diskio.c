@@ -15,7 +15,7 @@
 
 #include "fatfs_disk.h"
 
-#include "hw_config.h"
+// #include "hw_config.h"
 #include "sd_card.h"
 
 DSTATUS disk_status (BYTE pdrv) {

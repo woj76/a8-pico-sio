@@ -585,7 +585,7 @@ mounts_type mounts[] = {
 	{.str=str_d4, .mount_path=d4_mount, .mounted=false, /* .rw=BG, */ .status = 0}
 };
 
-const size_t sector_buffer_size = 512;
+const size_t sector_buffer_size = 768;
 uint8_t sector_buffer[sector_buffer_size];
 
 const uint32_t cas_header_FUJI = 0x494A5546;
@@ -1230,15 +1230,16 @@ bool loadAtxFile(FIL *fil, int atx_drive_number) {
 	return true;
 }
 
+// volatile int64_t sd_read_time;
 
-bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool op_write=false, size_t ri=0) {
+bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool op_write=false, bool op_verify=false) {
 	struct atxTrackHeader *trackHeader;
 	struct atxSectorListHeader *slHeader;
 	struct atxSectorHeader *sectorHeader;
 	struct atxTrackChunk *extSectorData;
 
 	uint16_t i;
-	size_t si = op_write ? 256 : ri;
+	const size_t si = 256;
 	bool r = false;
 
 	uint16_t atx_sector_size = disk_headers[atx_drive_number].atr_header.sec_size;
@@ -1250,6 +1251,8 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 
 	// set initial status (in case the target sector is not found)
 	*status = mask_fdc_missing;
+
+	//absolute_time_t head_move_time = get_absolute_time();
 
 	// delay for track stepping if needed
 	if (gCurrentHeadTrack[atx_drive_number] != tgtTrackNumber) {
@@ -1264,10 +1267,13 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 	// set new head track position
 	gCurrentHeadTrack[atx_drive_number] = tgtTrackNumber;
 
+	//sleep_until(head_move_time);
+
 	// sample current head position
-	//uint16_t headPosition = getCurrentHeadPosition();
+
 	head_position_t headPosition;
 	getCurrentHeadPosition(&headPosition);
+	//uint16_t headPosition = getCurrentHeadPosition();
 
 	// read the track header
 	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber];
@@ -1283,8 +1289,10 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 	if (trackHeader->trackNumber != tgtTrackNumber || atx_density[atx_drive_number] != ((trackHeader->flags & 0x2) ? atx_medium : atx_single))
 		sectorCount = 0;
 
+	uint32_t track_header_size = trackHeader->headerSize;
+
 	if(sectorCount) {
-		currentFileOffset += trackHeader->headerSize;
+		currentFileOffset += track_header_size;
 		if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorListHeader), false, si) == FR_OK) {
 			slHeader = (struct atxSectorListHeader *)&sector_buffer[si];
 			// sector list header is variable length, so skip any extra header bytes that may be present
@@ -1292,6 +1300,7 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		}else
 			sectorCount = 0;
 	}
+
 
 	uint32_t tgtSectorOffset; // the offset of the target sector data
 	uint32_t writeStatusOffset;
@@ -1310,13 +1319,14 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		weakOffset = -1;
 		write_status = mask_fdc_missing;
 		// iterate through all sector headers to find the target sector
-		for (i=0; i < sectorCount; i++) {
-			if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorHeader), false, si) == FR_OK) {
-				sectorHeader = (struct atxSectorHeader *)&sector_buffer[si];
+		if (sectorCount && mounted_file_transfer(atx_drive_number+1, currentFileOffset, sectorCount*sizeof(struct atxSectorHeader), false, si) == FR_OK) {
+			for (i=0; i < sectorCount; i++) {
+				sectorHeader = (struct atxSectorHeader *)&sector_buffer[si+i*sizeof(struct atxSectorHeader)];
 				// if the sector is not flagged as missing and its number matches the one we're looking for...
 				if (sectorHeader->number == tgtSectorNumber) {
 					if(sectorHeader->status & mask_fdc_missing) {
 						write_status |= sectorHeader->status;
+						currentFileOffset += sizeof(struct atxSectorHeader);
 						continue;
 					}
 					// check if it's the next sector that the head would encounter angularly...
@@ -1338,7 +1348,7 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		if (*status & mask_extended_data) {
 			// NOTE! the first part of the trackHeader data (stored in sector_buffer) is by now overwritten,
 			// but the headerSize field is far enough into the struct to stay untouched!
-			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + trackHeader->headerSize;
+			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + track_header_size;
 			do {
 				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false, si) != FR_OK)
 					break;
@@ -1361,11 +1371,22 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			} while (extSectorData->size);
 		}
 		if(tgtSectorOffset){
+			//absolute_time_t t1 = get_absolute_time();
+			if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, 0) != FR_OK)
+				tgtSectorOffset = 0;
+			else if(op_verify) {
+				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, 256) != FR_OK
+				|| memcmp(sector_buffer, &sector_buffer[256], atx_sector_size))
+				tgtSectorOffset = 0;
+			}
+			//sd_read_time = absolute_time_diff_us(t1, get_absolute_time());
+			// sd_read_time = absolute_time_diff_us(headPosition.stamp,get_absolute_time());
+
 			uint16_t au_one_sector_read = (23+act_sector_size)*(atx_density[atx_drive_number] == atx_single ? 8 : 4)+2;
+			if(op_verify)
+				au_one_sector_read += au_full_rotation;
 			sleep_until(delayed_by_us(headPosition.stamp, (au_one_sector_read + pTT + (pTT > 0 ? 0 : au_full_rotation))*8));
-			// This does not seem to make any difference, using the line below would allow to get rid of
-			// the stamp field in head_position_t altogether...?
-			//sleep_us((au_one_sector_read + pTT + (pTT > 0 ? 0 : au_full_rotation))*8);
+
 			if(*status)
 				// TODO This is according to Altirra, but it breaks test J for 1050?!
 				//sleep_us(is1050 ? (us_track_step_1050+us_head_settle_1050) : (au_full_rotation*8));
@@ -1373,8 +1394,6 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		} else {
 			// No matching sector found at all or the track does not match the disk density
 			sleep_until(delayed_by_ms(headPosition.stamp, is1050 ? ms_2fake_rot_1050 : ms_3fake_rot_810));
-			// Same here as above with using the head position time stamp
-			//sleep_ms(is1050 ? ms_2fake_rot_1050 : ms_3fake_rot_810);
 			if(is1050 || retries == 2)
 				if(!is1050)
 					sleep_us((43+tgtTrackNumber)*us_track_step_810+us_head_settle_810);
@@ -1382,7 +1401,6 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 					sleep_us((2*tgtTrackNumber+1)*us_track_step_1050+us_head_settle_1050);
 		}
 
-		//headPosition = getCurrentHeadPosition();
 		getCurrentHeadPosition(&headPosition);
 
 		if(!*status || (op_write && tgtSectorOffset))
@@ -1410,20 +1428,16 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			*status |= mask_fdc_write_protect;
 	}
 
-	if (tgtSectorOffset
-		&& mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, ri) == FR_OK
-		&& !*status)
+	if (tgtSectorOffset && !*status)
 		r = true;
 
 	if(!op_write) {
 		// if a weak offset is defined, randomize the appropriate data
 		if (weakOffset > -1)
 			for (i = (uint16_t) weakOffset; i < atx_sector_size; i++)
-				sector_buffer[ri+i] = (uint8_t) get_rand_32();
-		// Do not wait if we are doing a verify after write (no data to be sent back)
-		if(!ri)
-			sleep_until(delayed_by_us(headPosition.stamp, is1050 ? us_cs_calculation_1050 : us_cs_calculation_810));
-			//sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
+				sector_buffer[i] = (uint8_t) get_rand_32();
+		sleep_until(delayed_by_us(headPosition.stamp, is1050 ? us_cs_calculation_1050 : us_cs_calculation_810));
+		//sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
 	}else if(tgtSectorOffset) {
 		if(writeStatusOffset) {
 			sector_buffer[si] = *status;
@@ -1842,14 +1856,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							// mounts[drive_number].rw = RED;
 							red_blinks = -1;
 							update_rgb_led(false);
-							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true))
+							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true, sio_command.command_id == 'W')) {
 								f_op_stat = FR_INT_ERR;
-							else if(sio_command.command_id == 'W')
-								if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, false, to_read)
-							 		|| memcmp(sector_buffer, &sector_buffer[to_read], to_read))
-										f_op_stat = FR_INT_ERR;
-							if(f_op_stat != FR_OK)
 								disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
+							}
+//							else if(sio_command.command_id == 'W')
+//								if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, false, to_read)
+//							 		|| memcmp(sector_buffer, &sector_buffer[to_read], to_read))
+//										f_op_stat = FR_INT_ERR;
+							// if(f_op_stat != FR_OK)
+							//	disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
 
 							to_read = 0;
 							// break;
@@ -1882,7 +1898,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						break;
 					case disk_type_xex:
 					case disk_type_atx:
-						// TODO Allow for ATX formatting? Seems totally pointless.
 						r = 'N';
 						uart_putc_raw(uart1, r);
 						// break;
@@ -2180,6 +2195,7 @@ void core1_entry() {
 	dma_channel_set_irq1_enabled(dma_channel_turbo, true);
 
 	irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
+
 	irq_set_enabled(DMA_IRQ_1, true);
 
 	uart_init(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
@@ -2673,7 +2689,7 @@ void get_file(int file_entry_index) {
 						strcpy(&curr_path[i], f);
 						if(!mount_file(f, file_entry_index))
 							// TODO remove?
-							red_blinks = 6;
+							red_blinks = 4;
 						curr_path[i] = 0;
 						goto get_file_exit;
 					}
@@ -3041,15 +3057,15 @@ int main() {
 		update_main_menu_buttons();
 
 /*
-		sprintf(txt_buf, " %06d %02X %02X %02X", sampledHeadPosition, disk_headers[0].atr_header.temp2, sector_buffer[0], sector_buffer[88]);
+		sprintf(txt_buf, " %d", sd_read_time);
 		text_location.x = 0;
 		text_location.y = 0;
 		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*16);
 		graphics.set_pen(BG);
 		graphics.rectangle(rt);
 		print_text(txt_buf);
-		text_location.y += 16;
-		print_text(&txt_buf[20]);
+//		text_location.y += 16;
+//		print_text(&txt_buf[20]);
 */
 
 		if(to_ms_since_boot(get_absolute_time()) - last_drive_access > (last_drive == 0 ? 25000 : 2000))

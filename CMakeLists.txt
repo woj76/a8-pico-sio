@@ -33,7 +33,6 @@ target_sources(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/msc_disk.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs_disk.c
     ${CMAKE_CURRENT_LIST_DIR}/flash_fs.c
-    ${CMAKE_CURRENT_LIST_DIR}/hw_config.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/diskio.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/ff.c
     ${CMAKE_CURRENT_LIST_DIR}/fatfs/ffunicode.c

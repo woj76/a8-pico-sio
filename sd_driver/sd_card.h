@@ -1,18 +1,18 @@
 /* sd_card.h
 Copyright 2021 Carl John Kugler III
 
-Licensed under the Apache License, Version 2.0 (the License); you may not use 
-this file except in compliance with the License. You may obtain a copy of the 
+Licensed under the Apache License, Version 2.0 (the License); you may not use
+this file except in compliance with the License. You may obtain a copy of the
 License at
 
-   http://www.apache.org/licenses/LICENSE-2.0 
-Unless required by applicable law or agreed to in writing, software distributed 
-under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR 
-CONDITIONS OF ANY KIND, either express or implied. See the License for the 
+   http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 */
 
-// Note: The model used here is one FatFS per SD card. 
+// Note: The model used here is one FatFS per SD card.
 // Multiple partitions on a card are not supported.
 
 #pragma once
@@ -34,7 +34,6 @@ typedef struct sd_card_t sd_card_t;
 
 // "Class" representing SD Cards
 struct sd_card_t {
-    // const char *pcName;
     spi_t *spi;
     // Slave select is here instead of in spi_t because multiple SDs can share an SPI.
     uint ss_gpio;                   // Slave select for this SD card
@@ -65,6 +64,8 @@ struct sd_card_t {
     // Returns true if and only if SD card was sensed on the bus
     bool (*sd_test_com)(sd_card_t *sd_card_p);
 };
+
+sd_card_t *sd_get_by_num(size_t num);
 
 #define SD_BLOCK_DEVICE_ERROR_NONE 0
 #define SD_BLOCK_DEVICE_ERROR_WOULD_BLOCK -5001 /*!< operation would block */
