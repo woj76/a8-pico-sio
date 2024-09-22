@@ -401,7 +401,8 @@ const option_list option_lists[] = {
 };
 
 uint8_t current_options[option_count-1] = {0};
-char curr_path[2+256+16];
+const uint curr_path_len = 512;
+char curr_path[curr_path_len];
 size_t num_files, num_files_page;
 
 volatile uint8_t sd_card_present = 0;
@@ -863,6 +864,7 @@ int disk_dma_channel, dma_channel, dma_channel_turbo;
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
 // 16*8 also fails sometimes with the 1MHz base clock
+// TODO Check if this works with SD card on the Pico 1 (the slowest combination)
 const int pio_queue_size = 64*8;
 
 uint32_t pio_e;
@@ -1492,13 +1494,13 @@ volatile bool save_path_flag = false;
 
 const uint32_t flash_save_offset = HW_FLASH_STORAGE_BASE-FLASH_SECTOR_SIZE;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
-const size_t flash_config_offset = 256;
+const size_t flash_config_offset = curr_path_len;
 const size_t flash_check_sig_offset = flash_config_offset+64;
 const uint32_t config_magic = 0xDEADBEEF;
 
 void inline check_and_load_config(bool reset_config) {
 	if(!reset_config && *(uint32_t *)&flash_config_pointer[flash_check_sig_offset] == config_magic) {
-		memcpy(curr_path, &flash_config_pointer[0], 256);
+		memcpy(curr_path, &flash_config_pointer[0], curr_path_len);
 		memcpy(current_options, &flash_config_pointer[flash_config_offset], option_count-1);
 	} else {
 		save_path_flag = true;
@@ -1510,7 +1512,7 @@ void inline check_and_save_config() {
 	if(!save_path_flag && !save_config_flag)
 		return;
 	memset(sector_buffer, 0, sector_buffer_size);
-	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], 256);
+	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], curr_path_len);
 	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
 	uint32_t ints = save_and_disable_interrupts();
@@ -2978,7 +2980,8 @@ void show_about() {
 }
 
 int main() {
-	// stdio_init_all();
+
+	// Overclocking does not seem to be required
 	// set_sys_clock_khz(250000, true);
 	multicore_lockout_victim_init();
 	led.set_rgb(0, 0, 0);
@@ -3030,14 +3033,13 @@ int main() {
 	}else
 		blue_blinks = 4;
 
-/*
-	if(sd_card_present)
-		curr_path[0] = 0;
-	else
+	if(!sd_card_present && curr_path[0] == '1')
 		strcpy(curr_path, volume_names[0]);
-*/
 
 	multicore_launch_core1(core1_entry);
+	// This would give more scheduling priority to core 1 that
+	// serves the SIO communication, but it does not seem to be
+	// necessary
 	// bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS;
 	update_main_menu();
 	st7789.update(&graphics);
