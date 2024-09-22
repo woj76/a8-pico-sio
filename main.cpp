@@ -411,11 +411,14 @@ const char * const volume_names[] = {"0:", "1:"};
 char temp_array[2+256+16];
 volatile int16_t create_new_file = 0;
 
+char last_file_name[15] = {0};
+
 typedef struct  __attribute__((__packed__)) {
 	bool dir;
 	char short_name[15];
 	char long_name[258];
 	uint16_t dir_index;
+	bool last_file;
 } file_entry_type;
 
 const int files_per_page = 12;
@@ -478,6 +481,9 @@ int32_t read_directory(int32_t page_index, int page_size) {
 			strcpy(file_entries[i].long_name, volume_names[i]);
 			file_entries[i].dir = true;
 			file_entries[i].dir_index = i;
+			file_entries[i].last_file = false;
+			if(last_file_name[0] && !strcmp(file_entries[i].short_name, last_file_name))
+				file_entries[i].last_file = true;
 		}
 		return i;
 	}
@@ -515,7 +521,10 @@ int32_t read_directory(int32_t page_index, int page_size) {
 					file_entries[ret].dir_index = dir_index;
 					strcpy(file_entries[ret].long_name, fno.fname);
 					strcpy(file_entries[ret].short_name, fno.altname[0] ? fno.altname : fno.fname);
+					file_entries[ret].last_file = false;
 					if(is_dir) mark_directory(ret);
+					if(last_file_name[0] && !strcmp(file_entries[ret].short_name, last_file_name))
+						file_entries[ret].last_file = true;
 					if(!ret) {
 						ret++;
 						look_for_index = -1;
@@ -532,9 +541,9 @@ int32_t read_directory(int32_t page_index, int page_size) {
 						file_entries[ri-1] = fet;
 						ri--;
 					}
-					if(ret < page_size)
+					if(ret < page_size) {
 						ret++;
-					else if(look_for_index == -1 || file_entry_cmp(page_size, page_size+1) <= 0) {
+					}else if(look_for_index == -1 || file_entry_cmp(page_size, page_size+1) <= 0) {
 						look_for_index = -2;
 						file_entries[page_size+1] = file_entries[page_size];
 					}
@@ -2406,13 +2415,6 @@ void update_display_files(int page_index, int shift_index) {
 		for(int i = 0; i < num_files_page; i++) {
 			text_location.y = 8*(2+i)*font_scale;
 			update_one_display_file2(page_index, shift_index, i);
-/*
-			if(!page_index && i < shift_index) {
-				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
-				print_text(s, (i == cursor_position) ? s.size() : 0);
-			} else
-				update_one_display_file(i, i-shift_index);
-*/
 		}
 	}else{
 		int i = cursor_prev;
@@ -2421,13 +2423,6 @@ void update_display_files(int page_index, int shift_index) {
 			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 			update_one_display_file2(page_index, shift_index, i);
-/*
-			if(!page_index && i < shift_index) {
-				const std::string_view& s = (!i && ft == file_type::disk) ? str_new_image : str_up_dir;
-				print_text(s, i == cursor_position ? s.size() : 0);
-			} else
-				update_one_display_file(i, i-shift_index);
-*/
 			if(i == cursor_position)
 				break;
 			i = cursor_position;
@@ -2604,14 +2599,32 @@ void get_file(int file_entry_index) {
 		if(!last_page)
 			last_page = files_per_page;
 		num_files_page = (page_index == num_pages-1) ? last_page : files_per_page;
-		if(num_files)
-			read_directory(page_index, page_index ? num_files_page : (num_files_page-shift_index));
+		if(num_files) {
+			while(page_index < num_pages) {
+				int act_num_files_page = page_index ? num_files_page : (num_files_page-shift_index);
+				read_directory(page_index, act_num_files_page);
+				if(!last_file_name[0]) break;
+				bool file_found = false;
+				for(cursor_position=0; cursor_position < act_num_files_page; cursor_position++) {
+					if(file_entries[cursor_position].last_file) {
+						if(!page_index) cursor_position += shift_index;
+						file_found = true;
+						last_file_name[0] = 0;
+						break;
+					}
+				}
+				if(file_found) break;
+				page_index++;
+				num_files_page = (page_index == num_pages-1) ? last_page : files_per_page;
+			}
+		}
 		if(num_files || shift_index)
 			update_display_files(page_index, page_index ? 0 : shift_index);
 		int y1 = main_buttons[2].y+10*font_scale, y2 = main_buttons[3].y-2*font_scale;
 		int scroll_block_len = (y2-y1) / (num_pages ? num_pages : 1);
 		Rect scroll_bar(st7789.width - 7*font_scale, y1, 4*font_scale, y2-y1);
 		graphics.set_pen(BG); graphics.rectangle(scroll_bar);
+		scroll_bar.y += scroll_block_len*page_index;
 		scroll_bar.h = scroll_block_len;
 		graphics.set_pen(WHITE); graphics.rectangle(scroll_bar);
 		st7789.update(&graphics);
@@ -2664,8 +2677,9 @@ void get_file(int file_entry_index) {
 						cursor_prev = -1;
 						i--;
 						while(curr_path[i-1] != '/' && curr_path[i-1] != ':' && i > 0) i--;
+						strcpy(last_file_name, &curr_path[i]);
 						curr_path[i] = 0;
-						cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
+						// cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
 						break;
 					} else {
 						FILINFO fil_info;
@@ -2685,7 +2699,7 @@ void get_file(int file_entry_index) {
 						mutex_exit(&fs_lock);
 						if(fn == 10001) {
 							graphics.set_pen(BG); graphics.rectangle(scroll_bar);
-							Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,files_per_page*8*font_scale);
+							Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,(files_per_page+1)*8*font_scale);
 							graphics.rectangle(r);
 							char *f = &curr_path[i];
 							text_location.x = 4*8*font_scale;
@@ -2703,8 +2717,9 @@ void get_file(int file_entry_index) {
 								graphics.set_pen(BG); graphics.rectangle(r2);
 								st7789.update(&graphics);
 								if(!create_new_file) {
+									strcpy(last_file_name, f);
 									if(!mount_file(f, file_entry_index))
-										red_blinks = 6;
+										red_blinks = 2;
 
 								} else
 									print_text_wait(str_create_failed);
@@ -2728,18 +2743,22 @@ void get_file(int file_entry_index) {
 						page_index = 0;
 						cursor_prev = -1;
 						strcpy(&curr_path[i], f);
+						last_file_name[0] = 0;
 						cursor_position = (ft == file_type::disk && curr_path[0]) ? 1 : 0;
 						break;
 					} else {
 						strcpy(&curr_path[i], f);
+						strcpy(last_file_name, f);
 						if(!mount_file(f, file_entry_index))
-							// TODO remove?
-							red_blinks = 4;
+							red_blinks = 2;
 						curr_path[i] = 0;
 						goto get_file_exit;
 					}
 				}
 			} else if(button_b.read()) {
+				int fi = cursor_position - (page_index ? 0 : shift_index);
+				if(fi >= 0)
+					strcpy(last_file_name, file_entries[fi].short_name);
 				delete scroll_ptr; scroll_ptr = nullptr;
 				goto get_file_exit;
 			}
@@ -2972,11 +2991,6 @@ int main() {
 	struct repeating_timer tmr;
 	add_repeating_timer_ms(250, repeating_timer_led, NULL, &tmr);
 
-	// if not sd card {
-	//	red_blinks = 6;
-	//	green_blinks = 6;
-	//	blue_blinks = 6;
-	// }
 	if(button_a.read())
 		usb_drive();
 
@@ -3016,11 +3030,12 @@ int main() {
 	}else
 		blue_blinks = 4;
 
-	// TODO check and load config?
+/*
 	if(sd_card_present)
 		curr_path[0] = 0;
 	else
 		strcpy(curr_path, volume_names[0]);
+*/
 
 	multicore_launch_core1(core1_entry);
 	// bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS;
@@ -3073,7 +3088,11 @@ int main() {
 				}
 				update_main_menu();
 			}else{
-				ft = menu_to_type[cursor_position];
+				file_type new_ft = menu_to_type[cursor_position];
+				if(ft != new_ft) {
+					ft = new_ft;
+					last_file_name[0] = 0;
+				}
 				get_file(d);
 				save_path_flag = true;
 				update_main_menu();
