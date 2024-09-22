@@ -997,7 +997,7 @@ bool try_get_sio_command() {
 	}else{
 		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) {
 			high_speed ^= 1;
-			freshly_changed = 2;
+			freshly_changed = 2 - high_speed;
 			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
 			uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
 		}else if(freshly_changed)
