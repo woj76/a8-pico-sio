@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.13)
 
-# set(PICO_BOARD_HEADER_DIRS ${CMAKE_SOURCE_DIR})
-set(PICO_BOARD pico2)
+if(NOT PICO_BOARD)
+    set(PICO_BOARD pico2)
+endif()
 
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 include($ENV{PIMORONI_PICO_PATH}/pimoroni_pico_import.cmake)
@@ -21,11 +22,6 @@ include(drivers/st7789/st7789)
 include(common/pimoroni_bus)
 
 add_executable(a8_pico_sio)
-
-## 16MB of Flash on Pimoroni Lipo Pico
-#target_compile_definitions(a8_pico_sio PRIVATE
-#    PICO_FLASH_SIZE_BYTES=16777216
-#)
 
 target_sources(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp

@@ -2133,7 +2133,9 @@ void core1_entry() {
 	// Pico2 bug! This pull down will lock the pin state high after the first read, instead
 	// one has to use an external pull down resistor of not too high value, for example 4.7kohm
 	// (reports sugguest that it has to be below 9kohm)
-	// gpio_pull_down(normal_motor_pin);
+#ifndef RASPBERRYPI_PICO2
+	gpio_pull_down(normal_motor_pin);
+#endif
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
 	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
