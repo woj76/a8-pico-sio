@@ -1565,9 +1565,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
-					if(!mounts[i].status)
+					if(!mounts[i].status) {
+						blue_blinks = 0;
+						green_blinks = 0;
+						update_rgb_led(false);
 						mounts[i].mounted = false;
-					else if(last_drive == 0)
+					} else if(last_drive == 0)
 							last_drive = -1;
 				} else {
 					uint8_t disk_type = 0;
@@ -1958,6 +1961,9 @@ ignore_sio_command_frame:
 				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
 			to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 			if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
+				green_blinks = 0;
+				blue_blinks = 0;
+				update_rgb_led(false);
 				mounts[0].mounted = false;
 				mounts[0].status = 0;
 				continue;
@@ -2035,17 +2041,21 @@ ignore_sio_command_frame:
 					// f_mount(0, volume_names[sd_card_present], 1);
 					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
-					if(!offset)
+					if(!offset) {
+						blue_blinks = 0;
+						green_blinks = 0;
+						update_rgb_led(false);
 						mounts[0].mounted = false;
+					}else
+					if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+						while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
+						tight_loop_contents();
+						// This is to account for the possible motor off switching lag
+						sleep_ms(10);
+					}
 				}else{
 					blue_blinks = 0;
 					update_rgb_led(false);
-				}
-				if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
-					while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
-						tight_loop_contents();
-					// This is to account for the possible motor off switching lag
-					sleep_ms(10);
 				}
 			}
 			green_blinks = 0;
