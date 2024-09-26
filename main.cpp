@@ -44,11 +44,18 @@
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
 
+// State of the pin to detect motor on, should be 0 or 1 depending if
+// connected through a NOT gate transistor (needed for Pico 2 to function properly)
+#define MOTOR_ON_STATE 1u
+
+// Use the PIO based emulated disk rotational counter for the ATX support
+// (This is more of a PIO programming exercise rather than anything else)
 // #define PIO_DISK_COUNTER
 
 #ifdef PIO_DISK_COUNTER
 #include "disk_counter.pio.h"
 #endif
+
 #include "boot_loader.h"
 
 const uint32_t usb_boot_delay = 3000;
@@ -109,11 +116,8 @@ Button
 	button_y(PicoDisplay2::Y);
 */
 
-Button
-	button_a(0),
-	button_b(1),
-	button_x(2),
-	button_y(3);
+// Relocated button pins to free the SPI1 interface for the SD card
+Button button_a(0), button_b(1), button_x(2), button_y(3);
 
 const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
@@ -151,7 +155,7 @@ void cdc_task(void) {
 	if ( tud_cdc_available() ) {
 		char buf[64];
 		uint32_t count = tud_cdc_read(buf, sizeof(buf));
-		(void) count;
+		//(void) count;
 		tud_cdc_write(buf, count);
 		tud_cdc_write_flush();
 	}
@@ -796,7 +800,7 @@ const uint joy2_p4_pin = 28;
 
 // Conventional SIO, but also Turbo D & Turbo 6000
 const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin);
-const uint32_t normal_motor_value_on = (1u << normal_motor_pin);
+const uint32_t normal_motor_value_on = (MOTOR_ON_STATE << normal_motor_pin);
 
 // Turbo 2000 KSO - Joy 2 port
 const uint32_t kso_motor_pin_mask = (1u << joy2_p3_pin);
@@ -804,11 +808,11 @@ const uint32_t kso_motor_value_on = (0u << joy2_p3_pin);
 
 // Turbo 2001 / 2000F and sorts over SIO data
 const uint32_t comm_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin);
-const uint32_t comm_motor_value_on = (0u << command_line_pin) | (1u << normal_motor_pin);
+const uint32_t comm_motor_value_on = (0u << command_line_pin) | (MOTOR_ON_STATE << normal_motor_pin);
 
 // Turbo Blizzard - SIO Data Out
 const uint32_t sio_motor_pin_mask = (1u << sio_rx_pin) | (1u << normal_motor_pin);
-const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (1u << normal_motor_pin);
+const uint32_t sio_motor_value_on = (0u << sio_rx_pin) | (MOTOR_ON_STATE << normal_motor_pin);
 
 uint32_t turbo_motor_pin_mask;
 uint32_t turbo_motor_value_on;
@@ -960,11 +964,11 @@ bool try_get_sio_command() {
 	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and casette transfer
 	// should not be interrupted
-	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin))
+	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin) == MOTOR_ON_STATE)
 		return false;
 
 	// add sleep?
-	//if(gpio_get(normal_motor_pin))
+	//if(gpio_get(normal_motor_pin) == MOTOR_ON_STATE)
 	//		return;
 
 	memset(&sio_command, 0x01, 5);
@@ -2138,13 +2142,16 @@ void core1_entry() {
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
+
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN);
 
 	// Pico2 bug! This pull down will lock the pin state high after the first read, instead
 	// one has to use an external pull down resistor of not too high value, for example 4.7kohm
 	// (reports sugguest that it has to be below 9kohm)
 #ifndef RASPBERRYPI_PICO2
+#if MOTOR_ON_STATE == 1
 	gpio_pull_down(normal_motor_pin);
+#endif
 #endif
 	gpio_init(command_line_pin); gpio_set_dir(command_line_pin, GPIO_IN); gpio_pull_up(command_line_pin);
 
@@ -2386,12 +2393,14 @@ void update_one_display_file(int i, int fi) {
 		delete ptr_str_file_name;
 }
 
-// TODO use volume label if non-empty for SD card, fix the highlight length
-const char *drive_labels[] = {"Int. Flash:", "SD Card:"};
+const char * const str_int_flash = "Int. FLASH";
+const char * const str_sd_card = "SD/MMC Card";
+
+char drive_labels[2][12] = {0};
 
 void update_one_display_file2(int page_index, int shift_index, int i) {
 	if(!curr_path[0]) {
-		print_text(drive_labels[i], (i == cursor_position) ? 12 : 0);
+		print_text(drive_labels[i], (i == cursor_position) ? 11 : 0);
 	} else if(!page_index && i < shift_index) {
 		bool new_image_label = (!i && ft == file_type::disk);
 		const std::string_view& s = new_image_label ? str_new_image : str_up_dir;
@@ -3023,10 +3032,14 @@ int main() {
 
 	tud_mount_cb();
 	f_mount(&fatfs[0], volume_names[0], 1);
+	strcpy(drive_labels[0], str_int_flash);
 
 	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
 		green_blinks = 4;
 		sd_card_present = 1;
+		DWORD sn;
+		if(f_getlabel(volume_names[1], drive_labels[1], &sn) != FR_OK || !drive_labels[1][0])
+			strcpy(drive_labels[1], str_sd_card);
 	}else
 		blue_blinks = 4;
 
