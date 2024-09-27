@@ -99,9 +99,4 @@ void sd_spi_send_initializing_sequence(sd_card_t * pSD) {
 	//gpio_put(pSD->ss_gpio, old_ss);
 }
 
-// TODO Try to use this instead?
-//void sd_spi_init_pl022(sd_card_t *pSD) {
-//	gpio_set_function(pSD->ss_gpio, GPIO_FUNC_SPI);
-//}
-
 /* [] END OF FILE */

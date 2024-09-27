@@ -64,11 +64,6 @@ bool spi_transfer(spi_t *spi_p, const uint8_t *tx, uint8_t *rx, size_t length) {
     // the FIFO could overflow)
     dma_start_channel_mask((1u << spi_p->tx_dma) | (1u << spi_p->rx_dma));
 
-    //dma_channel_wait_for_finish_blocking(spi_p->tx_dma);
-    // TODO Probably only the wait on RX is needed
-    //dma_channel_wait_for_finish_blocking(spi_p->rx_dma);
-
-    // TODO if this works, move this construct to try_get_sio_command?
     absolute_time_t t = get_absolute_time();
     while (dma_channel_is_busy(spi_p->rx_dma) && absolute_time_diff_us(t, get_absolute_time()) < 1000000)
 	    tight_loop_contents();
@@ -115,13 +110,19 @@ bool my_spi_init(spi_t *spi_p) {
         // enum gpio_drive_strength { GPIO_DRIVE_STRENGTH_2MA = 0, GPIO_DRIVE_STRENGTH_4MA = 1, GPIO_DRIVE_STRENGTH_8MA = 2,
         // GPIO_DRIVE_STRENGTH_12MA = 3 }
         // enum gpio_drive_strength gpio_get_drive_strength (uint gpio)
+/*
         if (spi_p->set_drive_strength) {
             gpio_set_drive_strength(spi_p->mosi_gpio, spi_p->mosi_gpio_drive_strength);
             gpio_set_drive_strength(spi_p->sck_gpio, spi_p->sck_gpio_drive_strength);
         }
+*/
+
+	gpio_set_drive_strength(spi_p->mosi_gpio, sd_gpio_drive_strength);
+	gpio_set_drive_strength(spi_p->sck_gpio, sd_gpio_drive_strength);
 
         // SD cards' DO MUST be pulled up.
-        gpio_pull_up(spi_p->miso_gpio);
+        // This is done in hardware with a 47K resistor
+        // gpio_pull_up(spi_p->miso_gpio);
 
         // Grab some unused dma channels
         spi_p->tx_dma = dma_claim_unused_channel(true);

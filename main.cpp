@@ -14,6 +14,8 @@
 // https://www.a8preservation.com/#/guides/atx
 // https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
 
+// TODO Sort out umount of cassettes from the menu
+
 #include <string.h>
 #include <cstdlib>
 #include <ctype.h>
@@ -44,9 +46,11 @@
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
 
+#define RELOCATE_BUTTON_PINS
+
 // State of the pin to detect motor on, should be 0 or 1 depending if
 // connected through a NOT gate transistor (needed for Pico 2 to function properly)
-#define MOTOR_ON_STATE 1u
+#define MOTOR_ON_STATE 0u
 
 // Use the PIO based emulated disk rotational counter for the ATX support
 // (This is more of a PIO programming exercise rather than anything else)
@@ -108,16 +112,18 @@ Point text_location(str_x(str_press_2.size()+2), str_y(5)-4*font_scale);
 
 RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
 
-/*
+
+#ifdef RELOCATE_BUTTON_PINS
+// Relocated button pins to free the SPI1 interface for the SD card
+Button button_a(0), button_b(1), button_x(2), button_y(3);
+#else
 Button
 	button_a(PicoDisplay2::A),
 	button_b(PicoDisplay2::B),
 	button_x(PicoDisplay2::X),
 	button_y(PicoDisplay2::Y);
-*/
+#endif
 
-// Relocated button pins to free the SPI1 interface for the SD card
-Button button_a(0), button_b(1), button_x(2), button_y(3);
 
 const Pen
 	BG=graphics.create_pen(0, 0x5F, 0x8A),
@@ -1084,8 +1090,7 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 		}
 		if(f_op_stat != FR_OK)
 			break;
-		// The mounted check only makes sense for CAS
-		if(bytes_transferred != to_transfer || !mounts[drive_number].mounted)
+		if(bytes_transferred != to_transfer /* || !mounts[drive_number].mounted */)
 			f_op_stat = FR_INT_ERR;
 	}while(false);
 	f_close(&fil);
@@ -1541,6 +1546,15 @@ void update_last_drive(uint drive_number) {
 	last_drive_access = to_ms_since_boot(get_absolute_time());
 }
 
+void disable_mount(int d) {
+	mounts[d].status = 0;
+	mounts[d].mounted = false;
+	red_blinks = 0;
+	green_blinks = 0;
+	blue_blinks = 0;
+	update_rgb_led(false);
+}
+
 #include "disk_images_data.h"
 
 void main_sio_loop(uint sm, uint sm_turbo) {
@@ -1554,9 +1568,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 	uint bytes_read;
 	while(true) {
 		for(i=0; i<5; i++) {
-			if(i) mutex_enter_blocking(&mount_lock);
+			mutex_enter_blocking(&mount_lock);
 			if(!mounts[i].mounted || mounts[i].status) {
-				if(i) mutex_exit(&mount_lock);
+				mutex_exit(&mount_lock);
 				continue;
 			}
 			mutex_enter_blocking(&fs_lock);
@@ -1569,12 +1583,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
 						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
-					if(!mounts[i].status) {
-						blue_blinks = 0;
-						green_blinks = 0;
-						update_rgb_led(false);
-						mounts[i].mounted = false;
-					} else if(last_drive == 0)
+					if(!mounts[i].status)
+						disable_mount(i);
+					else if(last_drive == 0)
 							last_drive = -1;
 				} else {
 					uint8_t disk_type = 0;
@@ -1629,10 +1640,9 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 						default:
 							break;
 					}
-					if(!disk_type) {
-						mounts[i].status = 0;
-						mounts[i].mounted = false;
-					} else {
+					if(!disk_type)
+						disable_mount(i);
+					else {
 						disk_headers[i-1].atr_header.temp4 = disk_type;
 						if(last_drive == i)
 							last_drive = -1;
@@ -1642,7 +1652,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			}
 			//f_mount(0, volume_names[sd_card_present], 1);
 			mutex_exit(&fs_lock);
-			if(i) mutex_exit(&mount_lock);
+			mutex_exit(&mount_lock);
 		}
 
 		// command_line_pin, GPIO_IRQ_EDGE_FALL
@@ -1963,13 +1973,11 @@ ignore_sio_command_frame:
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
 				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
+			mutex_enter_blocking(&mount_lock);
 			to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 			if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
-				green_blinks = 0;
-				blue_blinks = 0;
-				update_rgb_led(false);
-				mounts[0].mounted = false;
-				mounts[0].status = 0;
+				disable_mount(0);
+				mutex_exit(&mount_lock);
 				continue;
 			}
 			update_last_drive(0);
@@ -2046,12 +2054,8 @@ ignore_sio_command_frame:
 					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
 					if(!offset) {
-						blue_blinks = 0;
-						green_blinks = 0;
-						update_rgb_led(false);
-						mounts[0].mounted = false;
-					}else
-					if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+						disable_mount(0);
+					}else if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
 						while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
 						tight_loop_contents();
 						// This is to account for the possible motor off switching lag
@@ -2064,6 +2068,7 @@ ignore_sio_command_frame:
 			}
 			green_blinks = 0;
 			update_rgb_led(false);
+			mutex_exit(&mount_lock);
 		}else if(create_new_file > 0 && last_drive == -1) {
 			uint8_t new_file_size_index = (create_new_file & 0xF)-1; // SD ED DD QD
 			uint8_t new_file_format_index = ((create_new_file >> 4 ) & 0xF)-1; // None DOS MyDOS Sparta
@@ -2396,11 +2401,11 @@ void update_one_display_file(int i, int fi) {
 const char * const str_int_flash = "Int. FLASH";
 const char * const str_sd_card = "SD/MMC Card";
 
-char drive_labels[2][12] = {0};
+char sd_label[12] = {0};
 
 void update_one_display_file2(int page_index, int shift_index, int i) {
 	if(!curr_path[0]) {
-		print_text(drive_labels[i], (i == cursor_position) ? 11 : 0);
+		print_text(i ? sd_label : str_int_flash, (i == cursor_position) ? 11 : 0);
 	} else if(!page_index && i < shift_index) {
 		bool new_image_label = (!i && ft == file_type::disk);
 		const std::string_view& s = new_image_label ? str_new_image : str_up_dir;
@@ -2548,8 +2553,8 @@ bool mount_file(char *f, int file_entry_index) {
 			if(!strcmp(mounts[j].mount_path, curr_path))
 				return false;
 		}
-		mutex_enter_blocking(&mount_lock);
 	}
+	mutex_enter_blocking(&mount_lock);
 	mounts[file_entry_index].mounted = true;
 	mounts[file_entry_index].status = 0;
 	strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
@@ -2559,7 +2564,7 @@ bool mount_file(char *f, int file_entry_index) {
 		mounts[file_entry_index].str[si+j] = (j < strlen(f) ? f[j] : ' ');
 		j++;
 	}
-	if(file_entry_index) mutex_exit(&mount_lock);
+	mutex_exit(&mount_lock);
 	return true;
 }
 
@@ -3032,14 +3037,13 @@ int main() {
 
 	tud_mount_cb();
 	f_mount(&fatfs[0], volume_names[0], 1);
-	strcpy(drive_labels[0], str_int_flash);
 
 	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
 		green_blinks = 4;
 		sd_card_present = 1;
 		DWORD sn;
-		if(f_getlabel(volume_names[1], drive_labels[1], &sn) != FR_OK || !drive_labels[1][0])
-			strcpy(drive_labels[1], str_sd_card);
+		if(f_getlabel(volume_names[1], sd_label, &sn) != FR_OK || !sd_label[0])
+			strcpy(sd_label, str_sd_card);
 	}else
 		blue_blinks = 4;
 
@@ -3110,18 +3114,17 @@ int main() {
 			}
 		}else if(button_b.read()) {
 			if(d != -1) {
-				if(d) mutex_enter_blocking(&mount_lock);
-				if(mounts[d].mounted) {
-					mounts[d].status = 0;
-					mounts[d].mounted = false;
-				}else{
+				mutex_enter_blocking(&mount_lock);
+				if(mounts[d].mounted)
+					disable_mount(d);
+				else{
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
 						mounts[d].status = 0;
 						if(!d) last_cas_offset = -1;
 					}
 				}
-				if(d) mutex_exit(&mount_lock);
+				mutex_exit(&mount_lock);
 			}
 		}
 		FSIZE_t s = mounts[0].status;

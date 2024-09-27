@@ -27,6 +27,9 @@ specific language governing permissions and limitations under the License.
 
 #define SPI_FILL_CHAR (0xFF)
 
+// Pico 2 does not work with anything above 2mA
+#define sd_gpio_drive_strength GPIO_DRIVE_STRENGTH_2MA
+
 // "Class" representing SPIs
 typedef struct {
     // SPI HW
@@ -40,9 +43,9 @@ typedef struct {
     // Drive strength levels for GPIO outputs.
     // enum gpio_drive_strength { GPIO_DRIVE_STRENGTH_2MA = 0, GPIO_DRIVE_STRENGTH_4MA = 1, GPIO_DRIVE_STRENGTH_8MA = 2,
     // GPIO_DRIVE_STRENGTH_12MA = 3 }
-    bool set_drive_strength;
-    enum gpio_drive_strength mosi_gpio_drive_strength;
-    enum gpio_drive_strength sck_gpio_drive_strength;
+//    bool set_drive_strength;
+//    enum gpio_drive_strength mosi_gpio_drive_strength;
+//    enum gpio_drive_strength sck_gpio_drive_strength;
 
     // State variables:
     uint tx_dma;
