@@ -1272,7 +1272,7 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 
 	uint16_t i;
 	const size_t si = 256;
-	bool r = false;
+	int8_t r = 1;
 
 	uint16_t atx_sector_size = disk_headers[atx_drive_number].atr_header.sec_size;
 	bool is1050 = (disk_headers[atx_drive_number].atr_header.temp3 & 0x40) ? false : true;
@@ -1312,9 +1312,12 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 	uint16_t sectorCount = 0;
 
 	// exit, if track not present
-	if (currentFileOffset && mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackHeader), false, si) == FR_OK) {
-		trackHeader = (struct atxTrackHeader *)&sector_buffer[si];
-		sectorCount = trackHeader->sectorCount;
+	if (currentFileOffset) {
+		if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackHeader), false, si) == FR_OK) {
+			trackHeader = (struct atxTrackHeader *)&sector_buffer[si];
+			sectorCount = trackHeader->sectorCount;
+		}else
+			r = -1;
 	}
 
 	// For "healthy" ATX files the first check should probably be always fail
@@ -1329,8 +1332,10 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			slHeader = (struct atxSectorListHeader *)&sector_buffer[si];
 			// sector list header is variable length, so skip any extra header bytes that may be present
 			currentFileOffset += slHeader->next - sectorCount * sizeof(struct atxSectorHeader);
-		}else
+		}else {
 			sectorCount = 0;
+			r = -1;
+		}
 	}
 
 
@@ -1351,29 +1356,32 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		weakOffset = -1;
 		write_status = mask_fdc_missing;
 		// iterate through all sector headers to find the target sector
-		if (sectorCount && mounted_file_transfer(atx_drive_number+1, currentFileOffset, sectorCount*sizeof(struct atxSectorHeader), false, si) == FR_OK) {
-			for (i=0; i < sectorCount; i++) {
-				sectorHeader = (struct atxSectorHeader *)&sector_buffer[si+i*sizeof(struct atxSectorHeader)];
-				// if the sector is not flagged as missing and its number matches the one we're looking for...
-				if (sectorHeader->number == tgtSectorNumber) {
-					if(sectorHeader->status & mask_fdc_missing) {
-						write_status |= sectorHeader->status;
-						currentFileOffset += sizeof(struct atxSectorHeader);
-						continue;
+		if (sectorCount) {
+			if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, sectorCount*sizeof(struct atxSectorHeader), false, si) == FR_OK) {
+				for (i=0; i < sectorCount; i++) {
+					sectorHeader = (struct atxSectorHeader *)&sector_buffer[si+i*sizeof(struct atxSectorHeader)];
+					// if the sector is not flagged as missing and its number matches the one we're looking for...
+					if (sectorHeader->number == tgtSectorNumber) {
+						if(sectorHeader->status & mask_fdc_missing) {
+							write_status |= sectorHeader->status;
+							currentFileOffset += sizeof(struct atxSectorHeader);
+							continue;
+						}
+						// check if it's the next sector that the head would encounter angularly...
+						//int tt = sectorHeader->timev - headPosition;
+						int tt = sectorHeader->timev - headPosition.angle;
+						if (!tgtSectorOffset || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
+							pTT = tt;
+							*status = sectorHeader->status;
+							writeStatusOffset = currentFileOffset + 1;
+							tgtSectorIndex = i;
+							tgtSectorOffset = sectorHeader->data;
+						}
 					}
-					// check if it's the next sector that the head would encounter angularly...
-					//int tt = sectorHeader->timev - headPosition;
-					int tt = sectorHeader->timev - headPosition.angle;
-					if (!tgtSectorOffset || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
-						pTT = tt;
-						*status = sectorHeader->status;
-						writeStatusOffset = currentFileOffset + 1;
-						tgtSectorIndex = i;
-						tgtSectorOffset = sectorHeader->data;
-					}
+					currentFileOffset += sizeof(struct atxSectorHeader);
 				}
-				currentFileOffset += sizeof(struct atxSectorHeader);
-			}
+			}else
+				r = -1;
 		}
 		uint16_t act_sector_size = atx_sector_size;
 		ext_sector_size = 0;
@@ -1382,8 +1390,10 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			// but the headerSize field is far enough into the struct to stay untouched!
 			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + track_header_size;
 			do {
-				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false, si) != FR_OK)
+				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false, si) != FR_OK) {
+					r = -1;
 					break;
+				}
 				extSectorData = (struct atxTrackChunk *) &sector_buffer[si];
 				if (extSectorData->size) {
 					// if the target sector has a weak data flag, grab the start weak offset within the sector data
@@ -1404,12 +1414,15 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 		}
 		if(tgtSectorOffset){
 			//absolute_time_t t1 = get_absolute_time();
-			if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, 0) != FR_OK)
+			if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, 0) != FR_OK) {
+				r = -1;
 				tgtSectorOffset = 0;
-			else if(op_verify) {
-				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, 256) != FR_OK
-				|| memcmp(sector_buffer, &sector_buffer[256], atx_sector_size))
-				tgtSectorOffset = 0;
+			} else if(op_verify) {
+				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, 256) != FR_OK) {
+					tgtSectorOffset = 0;
+					r = -1;
+				}else if(memcmp(sector_buffer, &sector_buffer[256], atx_sector_size))
+					tgtSectorOffset = 0;
 			}
 			//sd_read_time = absolute_time_diff_us(t1, get_absolute_time());
 			// sd_read_time = absolute_time_diff_us(headPosition.stamp,get_absolute_time());
@@ -1435,7 +1448,7 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 
 		getCurrentHeadPosition(&headPosition);
 
-		if(!*status || (op_write && tgtSectorOffset))
+		if(!*status || (op_write && tgtSectorOffset) || r < 0)
 			break;
 
 	}
@@ -1460,8 +1473,8 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			*status |= mask_fdc_write_protect;
 	}
 
-	if (tgtSectorOffset && !*status)
-		r = true;
+	if (tgtSectorOffset && !*status && r >= 0)
+		r = 0;
 
 	if(!op_write) {
 		// if a weak offset is defined, randomize the appropriate data
@@ -1473,8 +1486,10 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 	}else if(tgtSectorOffset) {
 		if(writeStatusOffset) {
 			sector_buffer[si] = *status;
-			if(mounted_file_transfer(atx_drive_number+1, writeStatusOffset, 1, true, si) != FR_OK)
+			if(mounted_file_transfer(atx_drive_number+1, writeStatusOffset, 1, true, si) != FR_OK) {
+				r = -1;
 				ext_sector_size = 0;
+			}
 		}
 		if(ext_sector_size > atx_sector_size)
 			ext_sector_size = ext_sector_size - atx_sector_size;
@@ -1484,8 +1499,10 @@ bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool
 			memset(&sector_buffer[si], 0xFF, 128);
 			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset + atx_sector_size;
 			while(ext_sector_size) {
-				if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, 128, true, si) != FR_OK)
+				if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, 128, true, si) != FR_OK) {
+					r = -1;
 					break;
+				}
 				currentFileOffset += 128;
 				ext_sector_size -= 128;
 			}
@@ -1596,25 +1613,16 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 				red_blinks = 4;
 				if(!curr_path[0])
 					last_file_name[0] = 0;
-				/*
-				if(!curr_path[0] || curr_path[0] == '1') {
-					last_file_name[0] = 0;
-					curr_path[0] = 0;
-					// strcpy(curr_path, volume_names[0]);
-				}
-				*/
 				sd_card_present = 0;
 				//sd_card_t *p_sd = sd_get_by_num(1);
 				//p_sd->sd_test_com(p_sd);
-				// This one is enough (way quicker)
+				// This one is enough and way quicker, we know by now that the card is gone
 				sd_get_by_num(1)->m_Status |= STA_NOINIT;
 			}
 			cd_temp = sd_card_present ^ 1;
 			mutex_exit(&mount_lock);
-		} else {
-			// last_sd_check = get_absolute_time();
+		} else
 			cd_temp = 0;
-		}
 		if(cd_temp || last_access_error_drive >= 0) {
 			mutex_enter_blocking(&mount_lock);
 			for(i=0; i<5; i++) {
@@ -1623,10 +1631,8 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					mounts[i].mounted = false;
 					mounts[i].mount_path[0] = 0;
 					strcpy(&mounts[i].str[i ? 3 : 2],"  <EMPTY>   ");
-					/*
-						red_blinks = 0;
-						green_blinks = 0;
-						*/
+					//red_blinks = 0;
+					//green_blinks = 0;
 					blue_blinks = 0;
 					update_rgb_led(false);
 				}
@@ -1730,6 +1736,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			int drive_number = sio_command.device_id-0x30;
 			mutex_enter_blocking(&mount_lock);
 			uint8_t r = 'A';
+			int8_t atx_res;
 			uint64_t us_pre_ce = 300;
 			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted || last_access_error[drive_number])
 				goto ignore_sio_command_frame;
@@ -1885,9 +1892,12 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 							update_rgb_led(false);
 							to_read = disk_headers[drive_number-1].atr_header.sec_size;
 							us_pre_ce = 0; // Handled in loadAtxSector
-							// TODO Distinguish between emulated error and FLASH/SD access error
-							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2))
+							atx_res = transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2);
+							if(atx_res) {
 								f_op_stat = FR_INT_ERR;
+								if(atx_res < 0)
+									set_last_access_error(drive_number);
+							}
 							// break;
 						default:
 							break;
@@ -1902,8 +1912,6 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 					uart_putc_raw(uart1, r);
 					if(r == 'N') break;
 					r = try_receive_data(drive_number, 12);
-					//for(i=0;i<12;i++)
-					//	sprintf(&txt_buf[2*i], "%02X", sector_buffer[i]);
 					if(r == 'A' && !compare_percom(drive_number))
 						r = 'N';
 					sleep_us(850);
@@ -1961,12 +1969,13 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 								break;
 							red_blinks = -1;
 							update_rgb_led(false);
-							// TODO Distinguish between the emulated error and Flash/SD access error
-							if(!transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true, sio_command.command_id == 'W')) {
+							atx_res = transferAtxSector(drive_number-1, sio_command.sector_number, &disk_headers[drive_number-1].atr_header.temp2, true, sio_command.command_id == 'W');
+							if(atx_res) {
 								f_op_stat = FR_INT_ERR;
 								disk_headers[drive_number-1].atr_header.temp1 |= 0x4; // write error
+								if(atx_res < 0)
+									set_last_access_error(drive_number);
 							}
-
 							to_read = 0;
 							// break;
 						case disk_type_xex:
@@ -3065,8 +3074,8 @@ void show_about() {
 	text_location.y += 16*font_scale;
 	print_text(str_about11);
 
-#ifdef PICO_BOARD
-	sprintf(temp_array, "HW: %s %dMB", PICO_BOARD, BOARD_SIZE);
+#ifdef RASPBERRYPI_PICO2
+	sprintf(temp_array, "HW: Pico2 %dMB", BOARD_SIZE);
 #else
 	sprintf(temp_array, "HW: Pico %dMB", BOARD_SIZE);
 #endif
@@ -3125,7 +3134,9 @@ int main() {
 	tud_mount_cb();
 	f_mount(&fatfs[0], volume_names[0], 1);
 
-	if(!try_mount_sd())
+	gpio_init(9); gpio_set_dir(9, GPIO_IN); // gpio_pull_up(9);
+
+	if(!gpio_get(9) || !try_mount_sd())
 		blue_blinks = 4;
 
 	if(!sd_card_present && curr_path[0] == '1')
