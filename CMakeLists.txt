@@ -24,6 +24,10 @@ include(common/pimoroni_bus)
 add_executable(a8_pico_sio)
 
 target_sources(a8_pico_sio PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/atx.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/disk_counter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/led_indicator.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/mounts.cpp
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp
     ${CMAKE_CURRENT_LIST_DIR}/usb_descriptors.c
     ${CMAKE_CURRENT_LIST_DIR}/msc_disk.c

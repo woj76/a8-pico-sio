@@ -40,32 +40,30 @@
 #include "libraries/pico_display_2/pico_display_2.hpp"
 #include "drivers/st7789/st7789.hpp"
 #include "libraries/pico_graphics/pico_graphics.hpp"
-#include "drivers/rgbled/rgbled.hpp"
 #include "drivers/button/button.hpp"
 
 #include "font_atari_data.hpp"
 #include "pin_io.pio.h"
 
-#define RELOCATE_BUTTON_PINS
+#include "config.h"
 
-// State of the pin to detect motor on, should be 0 or 1 depending if
-// connected through a NOT gate transistor (needed for Pico 2 to function properly)
-#define MOTOR_ON_STATE 0u
+#include "disk_counter.h"
 
-// Use the PIO based emulated disk rotational counter for the ATX support
-// (This is more of a PIO programming exercise rather than anything else)
-// #define PIO_DISK_COUNTER
 
-#ifdef PIO_DISK_COUNTER
-#include "disk_counter.pio.h"
-#endif
-
+// XEX ATR boot loader data
 #include "boot_loader.h"
 
-const uint32_t usb_boot_delay = 3000;
-const uint8_t font_scale = 2;
-constexpr std::string_view str_file_transfer{"File transfer..."};
+#include "led_indicator.hpp"
+#include "mounts.hpp"
+#include "atx.hpp"
 
+// In ms, time given to the user to press A/B during device boot
+const uint32_t usb_boot_delay = 3000;
+
+// TODO hardcode this? There is no use for font_scale == 1 really
+const uint8_t font_scale = 2;
+
+constexpr std::string_view str_file_transfer{"File transfer..."};
 constexpr std::string_view str_press_1{"USB drive"};
 constexpr std::string_view str_press_2{"Config reset"};
 
@@ -110,26 +108,19 @@ uint32_t inline str_y(uint32_t h) { return (st7789.height - h*8*font_scale)/2; }
 
 Point text_location(str_x(str_press_2.size()+2), str_y(5)-4*font_scale);
 
-RGBLED led(PicoDisplay2::LED_R, PicoDisplay2::LED_G, PicoDisplay2::LED_B, Polarity::ACTIVE_LOW, 25);
-
-
 #ifdef RELOCATE_BUTTON_PINS
 // Relocated button pins to free the SPI1 interface for the SD card
 Button button_a(0), button_b(1), button_x(2), button_y(3);
 #else
-Button
-	button_a(PicoDisplay2::A),
-	button_b(PicoDisplay2::B),
-	button_x(PicoDisplay2::X),
-	button_y(PicoDisplay2::Y);
+Button button_a(PicoDisplay2::A), button_b(PicoDisplay2::B), button_x(PicoDisplay2::X), button_y(PicoDisplay2::Y);
 #endif
 
 
+// Atari background "blue" and foreground "white", "red" and "green" for indicators,
+// all from the Atari (PAL) palette.
 const Pen
-	BG=graphics.create_pen(0, 0x5F, 0x8A),
-	WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC),
-	GREEN=graphics.create_pen(0x85,0xA0,0),
-	RED=graphics.create_pen(0x96,0x27,0x16);
+	BG=graphics.create_pen(0, 0x5F, 0x8A), WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC),
+	GREEN=graphics.create_pen(0x85,0xA0,0), RED=graphics.create_pen(0x96,0x27,0x16);
 
 
 void print_text(const std::string_view &t, int inverse=0) {
@@ -140,10 +131,6 @@ void print_text(const std::string_view &t, int inverse=0) {
 	}
 	graphics.text(t, text_location, st7789.width, font_scale, 0.0, 0, true);
 }
-
-volatile int8_t red_blinks = 0;
-volatile int8_t green_blinks = 0;
-volatile int8_t blue_blinks = 0;
 
 void print_text_wait(const std::string_view &t) {
 	red_blinks = 6;
@@ -167,6 +154,9 @@ void cdc_task(void) {
 	}
 }
 
+/**
+  Sliding "File transfer..." sign for the USB mode.
+*/
 bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	static int dy = 1;
 	graphics.set_pen(BG); graphics.clear();
@@ -175,26 +165,6 @@ bool repeating_timer_file_transfer(struct repeating_timer *t) {
 	if(text_location.y == 1) dy = 1;
 	print_text(str_file_transfer);
 	st7789.update(&graphics);
-	return true;
-}
-
-void update_rgb_led(bool from_interrupt) {
-	uint32_t ints;
-	if(!from_interrupt)
-		ints = save_and_disable_interrupts();
-	uint8_t r = (red_blinks & 1) ? 128 : 0;
-	uint8_t g = (green_blinks & 1) ? 128 : 0;
-	uint8_t b = (blue_blinks & 1) ? 128 : 0;
-	led.set_rgb(r,g,b);
-	if(!from_interrupt)
-		restore_interrupts(ints);
-}
-
-bool repeating_timer_led(struct repeating_timer *t) {
-	if(red_blinks > 0) red_blinks--;
-	if(green_blinks > 0) green_blinks--;
-	if(blue_blinks > 0) blue_blinks--;
-	update_rgb_led(true);
 	return true;
 }
 
@@ -244,6 +214,7 @@ void scroll_long_filename() {
 	st7789.update(&graphics);
 }
 
+/** USB drive mode, no exit from this. */
 void usb_drive() {
 	graphics.set_pen(BG); graphics.clear();
 
@@ -411,15 +382,11 @@ const option_list option_lists[] = {
 };
 
 uint8_t current_options[option_count-1] = {0};
-const uint curr_path_len = 512;
-char curr_path[curr_path_len];
+
+char curr_path[MAX_PATH_LEN];
 size_t num_files, num_files_page;
 
-volatile uint8_t sd_card_present = 0;
-
-const char * const volume_names[] = {"0:", "1:"};
-
-char temp_array[curr_path_len];
+char temp_array[MAX_PATH_LEN];
 volatile int16_t create_new_file = 0;
 
 char last_file_name[15] = {0};
@@ -453,7 +420,7 @@ size_t get_filename_ext(char *filename) {
 enum file_type {none, disk, casette};
 file_type ft = file_type::none;
 
-bool is_valid_file(char *filename) {
+static bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
 	switch(ft) {
 		case file_type::casette:
@@ -465,7 +432,7 @@ bool is_valid_file(char *filename) {
 	}
 }
 
-void mark_directory(int i) {
+static void mark_directory(int i) {
 	int l = strlen(file_entries[i].long_name);
 	file_entries[i].long_name[l] = '/';
 	file_entries[i].long_name[l+1] = 0;
@@ -474,16 +441,16 @@ void mark_directory(int i) {
 	file_entries[i].short_name[l+1] = 0;
 }
 
-FATFS fatfs[2];
-
-auto_init_mutex(fs_lock);
-
+// This is local
 uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with a tiny slack
 
-// param page_index signed int, -1 count only
-// result -1 error, otherwise files read / counted
+/**
+  Read (the portion of) the directory, page_index is to control what is the current alphabetically smallest
+  file name on the current page, page_size specifies how many files are supposed to appear on the current display page,
+  use -1 to only pre-count files in the directory. Returns either the total number of files (when page_size is -1)
+  or the total number of files for the next display (it should be assertable that result == page_size in this case).
+*/
 int32_t read_directory(int32_t page_index, int page_size) {
-	//FATFS fatfs;
 	FILINFO fno; DIR dir;
 	int32_t ret = -1;
 
@@ -501,6 +468,8 @@ int32_t read_directory(int32_t page_index, int page_size) {
 		return i;
 	}
 
+	// Show a progress slider in case it takes a while to read (it probably would for very
+	// large directories).
 	loading_pg.init();
 	struct repeating_timer timer;
 	add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &timer);
@@ -517,6 +486,11 @@ int32_t read_directory(int32_t page_index, int page_size) {
 				if (fno.fattrib & (AM_HID | AM_SYS)) continue;
 				bool is_dir = (fno.fattrib & AM_DIR);
 				if (!is_dir && !is_valid_file(fno.fname)) continue;
+				// I did not document in time this alphabetical file sorting in display page increments
+				// logic, and now I forgot how it was working... :/, but the general idea is to get the
+				// next n files that are just after the last portion of files displayed previously
+				// and remember the new smallest file for the next page. For previous pages, the data is
+				// cached in the next_page_references array.
 				if(page_index < 0) {
 					file_entries[page_size].dir = is_dir;
 					file_entries[page_size].dir_index = dir_index;
@@ -577,81 +551,20 @@ int cursor_prev = -1;
 int cursor_position = 1;
 
 const char * const str_config = "Config...";
-char str_d1[] = "D1:  <EMPTY>   ";
-char str_d2[] = "D2:  <EMPTY>   ";
-char str_d3[] = "D3:  <EMPTY>   ";
-char str_d4[] = "D4:  <EMPTY>   ";
 const char * const str_rot_up = "Rotate Up";
 const char * const str_rot_down = "Rotate Down";
-char str_cas[] = "C:  <EMPTY>   ";
 const char * const str_about = "About...";
-
 
 const int menu_to_mount[] = {-1,1,2,3,4,-1,-1,0,-1};
 
 const file_type menu_to_type[] = {
-	file_type::none,
-	file_type::disk, file_type::disk, file_type::disk, file_type::disk,
-	file_type::none, file_type::none,
-	file_type::casette, file_type::none
+	file_type::none, // Config
+	file_type::disk, file_type::disk, file_type::disk, file_type::disk, // the 4 Dx: disk drives
+	file_type::none, file_type::none, // Rotate buttons
+	file_type::casette, // the C: cassette device
+	file_type::none // About
 };
 
-typedef struct {
-	char *str;
-	char *mount_path;
-	bool mounted;
-	FSIZE_t status;
-} mounts_type;
-
-char d1_mount[curr_path_len] = {0};
-char d2_mount[curr_path_len] = {0};
-char d3_mount[curr_path_len] = {0};
-char d4_mount[curr_path_len] = {0};
-char c_mount[curr_path_len] = {0};
-
-mounts_type mounts[] = {
-	{.str=str_cas, .mount_path=c_mount, .mounted=false, .status = 0},
-	{.str=str_d1, .mount_path=d1_mount, .mounted=false, .status = 0},
-	{.str=str_d2, .mount_path=d2_mount, .mounted=false, .status = 0},
-	{.str=str_d3, .mount_path=d3_mount, .mounted=false, .status = 0},
-	{.str=str_d4, .mount_path=d4_mount, .mounted=false, .status = 0}
-};
-
-const size_t sector_buffer_size = 768;
-uint8_t sector_buffer[sector_buffer_size];
-
-const uint32_t cas_header_FUJI = 0x494A5546;
-const uint32_t cas_header_baud = 0x64756162;
-const uint32_t cas_header_data = 0x61746164;
-const uint32_t cas_header_fsk  = 0x206B7366;
-const uint32_t cas_header_pwms = 0x736D7770;
-const uint32_t cas_header_pwmc = 0x636D7770;
-const uint32_t cas_header_pwmd = 0x646D7770;
-const uint32_t cas_header_pwml = 0x6C6D7770;
-
-uint32_t timing_base_clock, max_clock_ms;
-
-typedef struct __attribute__((__packed__)) {
-	uint32_t signature;
-	uint16_t chunk_length;
-	union {
-		uint8_t aux_b[2];
-		uint16_t aux_w;
-	} aux;
-} cas_header_type;
-
-cas_header_type cas_header;
-volatile FSIZE_t cas_size;
-uint8_t pwm_bit_order;
-uint8_t pwm_bit;
-uint32_t pwm_sample_duration; // in cycles dep the base timing value
-uint32_t cas_sample_duration; // in cycles dep the base timing value
-uint16_t silence_duration; // in ms
-uint16_t cas_block_index;
-uint16_t cas_block_multiple;
-uint8_t cas_fsk_bit;
-
-volatile bool cas_block_turbo;
 
 const uint8_t percom_table[] = {
 	0x28,0x03,0x00,0x12,0x00,0x00,0x00,0x80, 0x80,0x16,0x80,0x00, 0,
@@ -661,27 +574,6 @@ const uint8_t percom_table[] = {
 };
 
 const int percom_table_size = 4;
-
-typedef struct __attribute__((__packed__)) {
-	uint16_t magic;
-	uint16_t pars;
-	uint16_t sec_size;
-	uint8_t pars_high;
-	uint32_t crc;
-	uint8_t temp1, temp2, temp3, temp4;
-	uint8_t flags;
-} atr_header_type;
-
-typedef union {
-	atr_header_type atr_header;
-	uint8_t data[sizeof(atr_header_type)];
-} disk_header_type;
-
-disk_header_type disk_headers[4];
-
-const uint8_t disk_type_atr = 1;
-const uint8_t disk_type_xex = 2;
-const uint8_t disk_type_atx = 3;
 
 uint8_t locate_percom(int drive_number) {
 	int i = 0;
@@ -696,7 +588,6 @@ uint8_t locate_percom(int drive_number) {
 	return r;
 }
 
-
 bool inline compare_percom(int drive_number) {
 	int i = disk_headers[drive_number-1].atr_header.temp3;
 	if(i & 0x80)
@@ -707,91 +598,6 @@ bool inline compare_percom(int drive_number) {
 	return true;
 }
 
-
-FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
-	uint bytes_read;
-	if(f_lseek(fil, offset) != FR_OK) {
-		offset = 0;
-		goto cas_read_forward_exit;
-	}
-	while(true) {
-		if(f_read(fil, &cas_header, sizeof(cas_header_type), &bytes_read) != FR_OK || bytes_read != sizeof(cas_header_type)) {
-			offset = 0;
-			goto cas_read_forward_exit;
-		}
-		offset += bytes_read;
-		cas_block_index = 0;
-		switch(cas_header.signature) {
-			case cas_header_FUJI:
-				offset += cas_header.chunk_length;
-				if(f_lseek(fil, offset) != FR_OK) {
-					offset = 0;
-					goto cas_read_forward_exit;
-				}
-				break;
-			case cas_header_baud:
-				if(cas_header.chunk_length) {
-					offset = 0;
-					goto cas_read_forward_exit;
-				}
-				cas_sample_duration = timing_base_clock/cas_header.aux.aux_w;
-				break;
-			case cas_header_data:
-				cas_block_turbo = false;
-				silence_duration = cas_header.aux.aux_w;
-				cas_block_multiple = 1;
-				goto cas_read_forward_exit;
-			case cas_header_fsk:
-				cas_block_turbo = false;
-				silence_duration = cas_header.aux.aux_w;
-				cas_block_multiple = 2;
-				cas_fsk_bit = 0;
-				goto cas_read_forward_exit;
-			case cas_header_pwms:
-				if(cas_header.chunk_length != 2) {
-					offset = 0;
-					goto cas_read_forward_exit;
-				}
-				pwm_bit_order = (cas_header.aux.aux_b[0] >> 2) & 0x1;
-				cas_header.aux.aux_b[0] &= 0x3;
-				if(cas_header.aux.aux_b[0] == 0b01)
-					pwm_bit = 0; // 0
-				else if(cas_header.aux.aux_b[0] == 0b10)
-					pwm_bit = 1; // 1
-				else {
-					offset = 0;
-					goto cas_read_forward_exit;
-				}
-				pwm_sample_duration = 0;
-				if(f_read(fil, &pwm_sample_duration, sizeof(uint16_t), &bytes_read) != FR_OK || bytes_read != sizeof(uint16_t)) {
-					offset = 0;
-					goto cas_read_forward_exit;
-				}
-				offset += bytes_read;
-				pwm_sample_duration = timing_base_clock/(2*pwm_sample_duration);
-				break;
-			case cas_header_pwmc:
-				cas_block_turbo = true;
-				silence_duration = cas_header.aux.aux_w;
-				cas_block_multiple = 3;
-				goto cas_read_forward_exit;
-			case cas_header_pwmd:
-				cas_block_turbo = true;
-				cas_block_multiple = 1;
-				goto cas_read_forward_exit;
-			case cas_header_pwml:
-				cas_block_turbo = true;
-				silence_duration = cas_header.aux.aux_w;
-				cas_block_multiple = 2;
-				cas_fsk_bit = pwm_bit;
-				goto cas_read_forward_exit;
-			default:
-				break;
-		}
-	}
-cas_read_forward_exit:
-	return offset;
-}
 
 // const uint led_pin = 25;
 
@@ -837,8 +643,7 @@ uint turbo_data_pin;
 //const uint turbo_data_pin = interrupt_pin;
 
 const PIO cas_pio = pio0;
-const PIO disk_pio = pio1;
-const auto GPIO_FUNC_PIOX = GPIO_FUNC_PIO0;
+#define GPIO_FUNC_PIOX GPIO_FUNC_PIO0
 
 uint sm, sm_turbo;
 pio_sm_config sm_config_turbo;
@@ -870,7 +675,7 @@ void check_turbo_conf() {
 
 volatile bool dma_block_turbo;
 volatile bool dma_going = false;
-int disk_dma_channel, dma_channel, dma_channel_turbo;
+int dma_channel, dma_channel_turbo;
 
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
@@ -899,26 +704,6 @@ void pio_enqueue(uint8_t b, uint32_t d) {
 		dma_handler();
 	}
 }
-
-/*
-void pio_enqueue(uint sm, uint8_t b, uint32_t d) {
-	uint32_t e = (b | (d << 1));
-	while(pio_sm_is_tx_fifo_full(cas_pio, sm))
-		tight_loop_contents();
-	cas_pio->txf[sm] = (b | (d << 1));
-}
-*/
-
-#ifdef PIO_DISK_COUNTER
-volatile uint32_t disk_counter;
-
-void disk_dma_handler() {
-	if(dma_hw->ints0 & (1u << disk_dma_channel)) {
-		dma_hw->ints0 = 1u << disk_dma_channel;
-		dma_channel_start(disk_dma_channel);
-	}
-}
-#endif
 
 const uint8_t boot_reloc_locs[] = {0x03, 0x0a, 0x0d, 0x12, 0x17, 0x1a, 0x21, 0x2c, 0x33, 0x3e, 0x44, 0x5c, 0x6b, 0x6e, 0x7f, 0x82, 0x87, 0x98, 0x9b, 0xa2, 0xa7, 0xae, 0xb2};
 const int boot_reloc_locs_size = 23;
@@ -953,8 +738,6 @@ uint8_t sio_checksum(uint8_t *data, size_t len) {
 }
 
 const uint32_t serial_read_timeout = 5000;
-
-auto_init_mutex(mount_lock);
 
 // volatile bool sio_command_received = false;
 // uint gpio, uint32_t event_mask
@@ -1055,478 +838,18 @@ uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	return r;
 }
 
-FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset = 0, FSIZE_t brpt=1) {
-	//FATFS fatfs;
-	FIL fil;
-	FRESULT f_op_stat;
-	uint bytes_transferred;
-	uint8_t *data = &sector_buffer[t_offset];
-
-	mutex_enter_blocking(&fs_lock);
-	do {
-		//if((f_op_stat = f_mount(&fatfs[0], (const char *)mounts[drive_number].mount_path, 1)) != FR_OK)
-		//	break;
-		if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
-			break;
-		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
-			break;
-		uint vol_num = mounts[drive_number].mount_path[0] - '0';
-		if(op_write) {
-			uint32_t ints;
-			if(!vol_num) {
-				ints = save_and_disable_interrupts();
-				multicore_lockout_start_blocking();
-			}
-			for(uint i=0; i<brpt; i++)
-				f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
-			f_op_stat = f_sync(&fil);
-			if(!vol_num){
-				multicore_lockout_end_blocking();
-				restore_interrupts(ints);
-			}
-		} else {
-			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
-
-		}
-		if(f_op_stat != FR_OK)
-			break;
-		if(bytes_transferred != to_transfer /* || !mounts[drive_number].mounted */)
-			f_op_stat = FR_INT_ERR;
-	}while(false);
-	f_close(&fil);
-	//f_mount(0, (const char *)mounts[drive_number].mount_path, 1);
-	mutex_exit(&fs_lock);
-	return f_op_stat;
-}
-
-// (Quite) modified implementation from sdrive-max project
-// Original author of the ATX code dated 21/01/2018 is Daniel Noguerol
-// Check the sdrive-max project for details
-
-enum atx_density { atx_single, atx_medium, atx_double};
-
-struct __attribute__((__packed__)) atxFileHeader {
-	uint8_t signature[4];
-	uint16_t version;
-	uint16_t minVersion;
-	uint16_t creator;
-	uint16_t creatorVersion;
-	uint32_t flags;
-	uint16_t imageType;
-	uint8_t density;
-	uint8_t reserved0;
-	uint32_t imageId;
-	uint16_t imageVersion;
-	uint16_t reserved1;
-	uint32_t startData;
-	uint32_t endData;
-	uint8_t reserved2[12];
-};
-
-struct __attribute__((__packed__)) atxTrackHeader {
-	uint32_t size;
-	uint16_t type;
-	uint16_t reserved0;
-	uint8_t trackNumber;
-	uint8_t reserved1;
-	uint16_t sectorCount;
-	uint16_t rate;
-	uint16_t reserved3;
-	uint32_t flags;
-	uint32_t headerSize;
-	uint8_t reserved4[8];
-};
-
-struct __attribute__((__packed__)) atxSectorListHeader {
-	uint32_t next;
-	uint16_t type;
-	uint16_t pad0;
-};
-
-struct __attribute__((__packed__)) atxSectorHeader {
-	uint8_t number;
-	uint8_t status;
-	uint16_t timev;
-	uint32_t data;
-};
-
-struct __attribute__((__packed__)) atxTrackChunk {
-	uint32_t size;
-	uint8_t type;
-	uint8_t sectorIndex;
-	uint16_t data;
-};
-
-const uint16_t atx_version = 0x01;
-const size_t max_track = 42;
-
-const uint au_full_rotation = 26042; // number of angular units in a full disk rotation
-const uint us_drive_request_delay = 3220; // number of microseconds drive takes to process a request
-//const uint us_crc_calculation = 2000; // According to SDrive-Max
-const uint us_cs_calculation_1050 = 270; // According to Altirra
-const uint us_cs_calculation_810 = 5136; // According to Altirra
-const uint us_track_step_810 = 5300; // number of microseconds drive takes to step 1 track
-//const uint us_track_step_1050 = 12410; // According to SDrive-Max
-const uint us_track_step_1050 = 20120; // According to Avery / Altirra
-const uint us_head_settle_1050 = 20000;
-const uint us_head_settle_810 = 10000;
-const uint ms_3fake_rot_810 = 1566;
-const uint ms_2fake_rot_1050 = 942;
-const int max_retries_810 = 4;
-const int max_retries_1050 = 2;
-
-const uint8_t mask_fdc_busy = 0x01;
-const uint8_t mask_fdc_drq = 0x02;
-const uint8_t mask_fdc_dlost = 0x04; // mask for checking FDC status "data lost" bit
-const uint8_t mask_fdc_crc = 0x08;
-const uint8_t mask_fdc_missing = 0x10; // RNF mask for checking FDC status "missing" bit
-const uint8_t mask_fdc_record_type = 0x20;
-const uint8_t mask_fdc_write_protect = 0x40;
-
-const uint8_t mask_extended_data = 0x40; // mask for checking FDC status extended data bit
-const uint8_t mask_reserved = 0x80;
-
-uint8_t atx_track_size[4]; // number of sectors in each track
-uint8_t atx_density[4];
-uint32_t gTrackInfo[4][max_track]; // pre-calculated info for each track
-uint8_t gCurrentHeadTrack[4];
-
-typedef struct {
-	absolute_time_t stamp;
-	uint16_t angle;
-} head_position_t;
-
-void getCurrentHeadPosition(head_position_t *hp) {
-	uint64_t s = get_absolute_time();
-	hp->stamp = s;
-#ifdef PIO_DISK_COUNTER
-	hp->angle = (uint16_t)(au_full_rotation-disk_counter-1);
-#else
-	hp->angle = (uint16_t)((to_us_since_boot(s) >> 3) % au_full_rotation);
-#endif
-}
-
-/*
-uint16_t incAngularDisplacement(uint16_t start, uint16_t delta) {
-	uint16_t ret = start + delta;
-	if (ret >= au_full_rotation)
-		ret -= au_full_rotation;
-	return ret;
-}
-
-uint16_t getCurrentHeadPosition() {
-	return (uint16_t)(au_full_rotation-disk_counter-1);
-}
-
-void waitForAngularPosition(uint16_t pos) {
-	// Alternative 1
-	while(getCurrentHeadPosition() != pos)
-		tight_loop_contents();
-
-	// Alternative 2
-	//int32_t to_wait = pos - getCurrentHeadPosition();
-	//if(to_wait < 0)
-	//	to_wait += au_full_rotation;
-	//sleep_us(8*to_wait);
-
-}
-*/
-
-bool loadAtxFile(FIL *fil, int atx_drive_number) {
-	struct atxFileHeader *fileHeader;
-	struct atxTrackHeader *trackHeader;
-	uint bytes_read;
-
-	if(f_read(fil, sector_buffer, sizeof(struct atxFileHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxFileHeader))
-		return false;
-
-	fileHeader = (struct atxFileHeader *) sector_buffer;
-	// The AT8X header should have been checked by now
-	if (fileHeader->version != atx_version || fileHeader->minVersion != atx_version)
-		return false;
-
-	atx_density[atx_drive_number] = fileHeader->density;
-	atx_track_size[atx_drive_number] = (fileHeader->density == atx_medium) ? 26 : 18;
-	disk_headers[atx_drive_number].atr_header.sec_size = (fileHeader->density == atx_double) ? 256 : 128;
-	gCurrentHeadTrack[atx_drive_number] = 0;
-
-	uint32_t startOffset = fileHeader->startData;
-	for (uint8_t track = 0; track < max_track; track++) {
-		f_lseek(fil, startOffset);
-		if(f_read(fil, sector_buffer, sizeof(struct atxTrackHeader), &bytes_read) != FR_OK || bytes_read != sizeof(struct atxTrackHeader))
-			break;
-		trackHeader = (struct atxTrackHeader *) sector_buffer;
-		gTrackInfo[atx_drive_number][track] = startOffset;
-		startOffset += trackHeader->size;
-	}
-	return true;
-}
-
-// volatile int64_t sd_read_time;
-
-bool transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bool op_write=false, bool op_verify=false) {
-	struct atxTrackHeader *trackHeader;
-	struct atxSectorListHeader *slHeader;
-	struct atxSectorHeader *sectorHeader;
-	struct atxTrackChunk *extSectorData;
-
-	uint16_t i;
-	const size_t si = 256;
-	int8_t r = 1;
-
-	uint16_t atx_sector_size = disk_headers[atx_drive_number].atr_header.sec_size;
-	bool is1050 = (disk_headers[atx_drive_number].atr_header.temp3 & 0x40) ? false : true;
-
-	// calculate track and relative sector number from the absolute sector number
-	uint8_t tgtTrackNumber = (num - 1) / atx_track_size[atx_drive_number];
-	uint8_t tgtSectorNumber = (num - 1) % atx_track_size[atx_drive_number] + 1;
-
-	// set initial status (in case the target sector is not found)
-	*status = mask_fdc_missing;
-
-	//absolute_time_t head_move_time = get_absolute_time();
-
-	// delay for track stepping if needed
-	if (gCurrentHeadTrack[atx_drive_number] != tgtTrackNumber) {
-		int diff = tgtTrackNumber - gCurrentHeadTrack[atx_drive_number];
-		if (diff > 0)
-			diff += (is1050 ? 1 : 0);
-		else
-			diff = -diff;
-		sleep_us(is1050 ? (diff*us_track_step_1050 + us_head_settle_1050) : (diff*us_track_step_810 + us_head_settle_810));
-	}
-
-	// set new head track position
-	gCurrentHeadTrack[atx_drive_number] = tgtTrackNumber;
-
-	//sleep_until(head_move_time);
-
-	// sample current head position
-
-	head_position_t headPosition;
-	getCurrentHeadPosition(&headPosition);
-	//uint16_t headPosition = getCurrentHeadPosition();
-
-	// read the track header
-	uint32_t currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber];
-	uint16_t sectorCount = 0;
-
-	// exit, if track not present
-	if (currentFileOffset) {
-		if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackHeader), false, si) == FR_OK) {
-			trackHeader = (struct atxTrackHeader *)&sector_buffer[si];
-			sectorCount = trackHeader->sectorCount;
-		}else
-			r = -1;
-	}
-
-	// For "healthy" ATX files the first check should probably be always fail
-	if (trackHeader->trackNumber != tgtTrackNumber || atx_density[atx_drive_number] != ((trackHeader->flags & 0x2) ? atx_medium : atx_single))
-		sectorCount = 0;
-
-	uint32_t track_header_size = trackHeader->headerSize;
-
-	if(sectorCount) {
-		currentFileOffset += track_header_size;
-		if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxSectorListHeader), false, si) == FR_OK) {
-			slHeader = (struct atxSectorListHeader *)&sector_buffer[si];
-			// sector list header is variable length, so skip any extra header bytes that may be present
-			currentFileOffset += slHeader->next - sectorCount * sizeof(struct atxSectorHeader);
-		}else {
-			sectorCount = 0;
-			r = -1;
-		}
-	}
-
-
-	uint32_t tgtSectorOffset; // the offset of the target sector data
-	uint32_t writeStatusOffset;
-	int16_t weakOffset;
-	uint retries = is1050 ? max_retries_1050 : max_retries_810;
-	uint32_t retryOffset = currentFileOffset;
-	uint8_t write_status;
-	uint16_t ext_sector_size;
-	while (retries > 0) {
-		retries--;
-		currentFileOffset = retryOffset;
-		int pTT;
-		uint16_t tgtSectorIndex = 0; // the index of the target sector within the sector list
-		tgtSectorOffset = 0;
-		writeStatusOffset = 0;
-		weakOffset = -1;
-		write_status = mask_fdc_missing;
-		// iterate through all sector headers to find the target sector
-		if (sectorCount) {
-			if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, sectorCount*sizeof(struct atxSectorHeader), false, si) == FR_OK) {
-				for (i=0; i < sectorCount; i++) {
-					sectorHeader = (struct atxSectorHeader *)&sector_buffer[si+i*sizeof(struct atxSectorHeader)];
-					// if the sector is not flagged as missing and its number matches the one we're looking for...
-					if (sectorHeader->number == tgtSectorNumber) {
-						if(sectorHeader->status & mask_fdc_missing) {
-							write_status |= sectorHeader->status;
-							currentFileOffset += sizeof(struct atxSectorHeader);
-							continue;
-						}
-						// check if it's the next sector that the head would encounter angularly...
-						//int tt = sectorHeader->timev - headPosition;
-						int tt = sectorHeader->timev - headPosition.angle;
-						if (!tgtSectorOffset || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
-							pTT = tt;
-							*status = sectorHeader->status;
-							writeStatusOffset = currentFileOffset + 1;
-							tgtSectorIndex = i;
-							tgtSectorOffset = sectorHeader->data;
-						}
-					}
-					currentFileOffset += sizeof(struct atxSectorHeader);
-				}
-			}else
-				r = -1;
-		}
-		uint16_t act_sector_size = atx_sector_size;
-		ext_sector_size = 0;
-		if (*status & mask_extended_data) {
-			// NOTE! the first part of the trackHeader data (stored in sector_buffer) is by now overwritten,
-			// but the headerSize field is far enough into the struct to stay untouched!
-			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + track_header_size;
-			do {
-				if (mounted_file_transfer(atx_drive_number+1, currentFileOffset, sizeof(struct atxTrackChunk), false, si) != FR_OK) {
-					r = -1;
-					break;
-				}
-				extSectorData = (struct atxTrackChunk *) &sector_buffer[si];
-				if (extSectorData->size) {
-					// if the target sector has a weak data flag, grab the start weak offset within the sector data
-					if (extSectorData->sectorIndex == tgtSectorIndex) {
-						if(extSectorData->type == 0x10) // weak sector
-							weakOffset = extSectorData->data;
-						else if(extSectorData->type == 0x11) { // extended sector
-							ext_sector_size = 128 << extSectorData->data;
-							// 1050 waits for long sectors, 810 does not
-							if(is1050 ? (ext_sector_size > act_sector_size) : (ext_sector_size < act_sector_size))
-								act_sector_size = ext_sector_size;
-						}
-						break;
-					}
-					currentFileOffset += extSectorData->size;
-				}
-			} while (extSectorData->size);
-		}
-		if(tgtSectorOffset){
-			//absolute_time_t t1 = get_absolute_time();
-			if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, 0) != FR_OK) {
-				r = -1;
-				tgtSectorOffset = 0;
-			} else if(op_verify) {
-				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, 256) != FR_OK) {
-					tgtSectorOffset = 0;
-					r = -1;
-				}else if(memcmp(sector_buffer, &sector_buffer[256], atx_sector_size))
-					tgtSectorOffset = 0;
-			}
-			//sd_read_time = absolute_time_diff_us(t1, get_absolute_time());
-			// sd_read_time = absolute_time_diff_us(headPosition.stamp,get_absolute_time());
-
-			uint16_t au_one_sector_read = (23+act_sector_size)*(atx_density[atx_drive_number] == atx_single ? 8 : 4)+2;
-			if(op_verify)
-				au_one_sector_read += au_full_rotation;
-			sleep_until(delayed_by_us(headPosition.stamp, (au_one_sector_read + pTT + (pTT > 0 ? 0 : au_full_rotation))*8));
-
-			if(*status)
-				// TODO This is according to Altirra, but it breaks test J for 1050?!
-				//sleep_us(is1050 ? (us_track_step_1050+us_head_settle_1050) : (au_full_rotation*8));
-				sleep_us(au_full_rotation*8);
-		} else {
-			// No matching sector found at all or the track does not match the disk density
-			sleep_until(delayed_by_ms(headPosition.stamp, is1050 ? ms_2fake_rot_1050 : ms_3fake_rot_810));
-			if(is1050 || retries == 2)
-				if(!is1050)
-					sleep_us((43+tgtTrackNumber)*us_track_step_810+us_head_settle_810);
-				else if(tgtTrackNumber)
-					sleep_us((2*tgtTrackNumber+1)*us_track_step_1050+us_head_settle_1050);
-		}
-
-		getCurrentHeadPosition(&headPosition);
-
-		if(!*status || (op_write && tgtSectorOffset) || r < 0)
-			break;
-
-	}
-
-	*status &= ~(mask_reserved | mask_extended_data);
-
-	if(op_write) {
-		if(tgtSectorOffset)
-			*status &= ~(mask_fdc_crc | mask_fdc_record_type);
-		else
-			*status = write_status & ~(mask_reserved | mask_extended_data);
-	} else {
-		if (*status & mask_fdc_dlost) {
-			if(is1050)
-				*status |= mask_fdc_drq;
-			else {
-				*status &= ~(mask_fdc_dlost | mask_fdc_crc);
-				*status |= mask_fdc_busy;
-			}
-		}
-		if(!is1050 && (*status & mask_fdc_record_type))
-			*status |= mask_fdc_write_protect;
-	}
-
-	if (tgtSectorOffset && !*status && r >= 0)
-		r = 0;
-
-	if(!op_write) {
-		// if a weak offset is defined, randomize the appropriate data
-		if (weakOffset > -1)
-			for (i = (uint16_t) weakOffset; i < atx_sector_size; i++)
-				sector_buffer[i] = (uint8_t) get_rand_32();
-		sleep_until(delayed_by_us(headPosition.stamp, is1050 ? us_cs_calculation_1050 : us_cs_calculation_810));
-		//sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
-	}else if(tgtSectorOffset) {
-		if(writeStatusOffset) {
-			sector_buffer[si] = *status;
-			if(mounted_file_transfer(atx_drive_number+1, writeStatusOffset, 1, true, si) != FR_OK) {
-				r = -1;
-				ext_sector_size = 0;
-			}
-		}
-		if(ext_sector_size > atx_sector_size)
-			ext_sector_size = ext_sector_size - atx_sector_size;
-		else
-			ext_sector_size = 0;
-		if((*status & mask_fdc_dlost) && ext_sector_size) {
-			memset(&sector_buffer[si], 0xFF, 128);
-			currentFileOffset = gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset + atx_sector_size;
-			while(ext_sector_size) {
-				if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, 128, true, si) != FR_OK) {
-					r = -1;
-					break;
-				}
-				currentFileOffset += 128;
-				ext_sector_size -= 128;
-			}
-		}
-	}
-
-	// the Atari expects an inverted FDC status byte
-	*status = ~(*status);
-
-	return r;
-}
-
 volatile bool save_config_flag = false;
 volatile bool save_path_flag = false;
 
 const uint32_t flash_save_offset = HW_FLASH_STORAGE_BASE-FLASH_SECTOR_SIZE;
 const uint8_t *flash_config_pointer = (uint8_t *)(XIP_BASE+flash_save_offset);
-const size_t flash_config_offset = curr_path_len;
+const size_t flash_config_offset = MAX_PATH_LEN;
 const size_t flash_check_sig_offset = flash_config_offset+64;
 const uint32_t config_magic = 0xDEADBEEF;
 
 void inline check_and_load_config(bool reset_config) {
 	if(!reset_config && *(uint32_t *)&flash_config_pointer[flash_check_sig_offset] == config_magic) {
-		memcpy(curr_path, &flash_config_pointer[0], curr_path_len);
+		memcpy(curr_path, &flash_config_pointer[0], MAX_PATH_LEN);
 		memcpy(current_options, &flash_config_pointer[flash_config_offset], option_count-1);
 	} else {
 		save_path_flag = true;
@@ -1538,7 +861,7 @@ void inline check_and_save_config() {
 	if(!save_path_flag && !save_config_flag)
 		return;
 	memset(sector_buffer, 0, sector_buffer_size);
-	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], curr_path_len);
+	memcpy(sector_buffer, save_path_flag ? (uint8_t *)curr_path : &flash_config_pointer[0], MAX_PATH_LEN);
 	memcpy(&sector_buffer[flash_config_offset], save_config_flag ? current_options : (uint8_t *)&flash_config_pointer[flash_config_offset], option_count-1);
 	*(uint32_t *)&sector_buffer[flash_check_sig_offset] = config_magic;
 	uint32_t ints = save_and_disable_interrupts();
@@ -1553,46 +876,9 @@ void inline check_and_save_config() {
 
 //char txt_buf[25] = {0};
 
-const char * const str_int_flash = "Int. FLASH";
-const char * const str_sd_card = "SD/MMC Card";
-
-char sd_label[12] = {0};
-
-//FRESULT f_mount_result;
-
-uint8_t try_mount_sd() {
-	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
-		DWORD sn;
-		if(f_getlabel(volume_names[1], sd_label, &sn) != FR_OK || !sd_label[0])
-			strcpy(sd_label, str_sd_card);
-		green_blinks = 4;
-		sd_card_present = 1;
-	}else
-		sd_card_present = 0;
-	return sd_card_present;
-}
-
-volatile int last_drive = -1;
-volatile uint32_t last_drive_access = 0;
-
-void update_last_drive(uint drive_number) {
-	last_drive = drive_number;
-	last_drive_access = to_ms_since_boot(get_absolute_time());
-}
-
-
 #include "disk_images_data.h"
 
-int last_access_error_drive = -1;
-bool last_access_error[5] = {false};
-
-void set_last_access_error(int d) {
-	last_access_error_drive = d;
-	last_access_error[last_access_error_drive] = true;
-}
-
 void main_sio_loop(uint sm, uint sm_turbo) {
-	//FATFS fatfs;
 	FIL fil;
 	FILINFO fil_info;
 	FSIZE_t offset;
@@ -2230,8 +1516,8 @@ ignore_sio_command_frame:
 
 void core1_entry() {
 
-	//timing_base_clock = clock_get_hz(clk_sys);
-	timing_base_clock = 1000000;
+	timing_base_clock = clock_get_hz(clk_sys);
+	//timing_base_clock = 1000000;
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
 	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
@@ -2251,37 +1537,11 @@ void core1_entry() {
 	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
 
 #ifdef PIO_DISK_COUNTER
-	uint disk_pio_offset = pio_add_program(disk_pio, &disk_counter_program);
-	float disk_clk_divider = (float)clock_get_hz(clk_sys)/1000000;
-	uint disk_sm = pio_claim_unused_sm(disk_pio, true);
-	pio_sm_config disk_sm_config = pin_io_program_get_default_config(disk_pio_offset);
-	sm_config_set_clkdiv(&disk_sm_config, disk_clk_divider);
-	sm_config_set_in_shift(&disk_sm_config, true, false, 32);
-	sm_config_set_out_shift(&disk_sm_config, true, true, 32);
-	pio_sm_init(disk_pio, disk_sm, disk_pio_offset, &disk_sm_config);
-
-	disk_dma_channel = dma_claim_unused_channel(true);
-	dma_channel_config disk_dma_c = dma_channel_get_default_config(disk_dma_channel);
-	channel_config_set_transfer_data_size(&disk_dma_c, DMA_SIZE_32);
-	channel_config_set_read_increment(&disk_dma_c, false);
-	channel_config_set_write_increment(&disk_dma_c, false);
-	channel_config_set_dreq(&disk_dma_c, pio_get_dreq(disk_pio, disk_sm, false));
-	pio_sm_set_enabled(disk_pio, disk_sm, true);
-	dma_channel_set_irq0_enabled(disk_dma_channel, true);
-
-	irq_add_shared_handler(DMA_IRQ_0, disk_dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
-	irq_set_enabled(DMA_IRQ_0, true);
-
-	// Pico 2 does not like the "full" 0x80000000 for transfer counter, the core freezes
-	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
-	// dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
-
-	disk_pio->txf[disk_sm] = (au_full_rotation-1);
+	init_disk_counter();
 #endif
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
  	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
-
 
 	sm = pio_claim_unused_sm(cas_pio, true);
 	pio_gpio_init(cas_pio, sio_tx_pin);
@@ -2792,7 +2052,6 @@ void get_file(int file_entry_index) {
 						break;
 					} else {
 						FILINFO fil_info;
-						//FATFS fatfs;
 						int fn = 0;
 						mutex_enter_blocking(&fs_lock);
 						//if(f_mount(&fatfs[0], curr_path, 1) == FR_OK) {
@@ -3091,15 +2350,12 @@ int main() {
 	// Overclocking does not seem to be required
 	// set_sys_clock_khz(250000, true);
 	multicore_lockout_victim_init();
-	led.set_rgb(0, 0, 0);
-	led.set_brightness(128);
 	st7789.set_backlight(255);
 
 	graphics.set_font(&atari_font);
 	graphics.set_pen(BG); graphics.clear();
 
-	struct repeating_timer tmr;
-	add_repeating_timer_ms(250, repeating_timer_led, NULL, &tmr);
+	init_rgb_led();
 
 	if(button_a.read())
 		usb_drive();
@@ -3128,6 +2384,8 @@ int main() {
 			usb_drive();
 		sleep_ms(1000/60);
 	}while(boot_time <= usb_boot_delay);
+
+	init_locks();
 
 	check_and_load_config(b_pressed);
 
@@ -3217,6 +2475,8 @@ int main() {
 				if(mounts[d].mounted) {
 					mounts[d].status = 0;
 					mounts[d].mounted = false;
+					blue_blinks = 0;
+					update_rgb_led(false);
 				} else {
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;
