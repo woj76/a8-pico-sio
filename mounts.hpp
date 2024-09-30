@@ -2,8 +2,6 @@
 
 #include "pico/multicore.h"
 
-#define MAX_PATH_LEN 512
-
 typedef struct {
 	char *str;
 	char *mount_path;
@@ -34,6 +32,9 @@ typedef union {
 	atr_header_type atr_header;
 	uint8_t data[sizeof(atr_header_type)];
 } disk_header_type;
+
+enum file_type {none, disk, casette};
+extern file_type ft;
 
 extern char str_d1[];
 extern char str_d2[];
@@ -86,6 +87,8 @@ void init_locks();
 #define cas_header_pwml 0x6C6D7770
 
 uint8_t try_mount_sd();
+
+bool mount_file(char *f, int drive_number);
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset=0, FSIZE_t brpt=1);
 

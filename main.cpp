@@ -56,6 +56,7 @@
 #include "led_indicator.hpp"
 #include "mounts.hpp"
 #include "atx.hpp"
+#include "file_load.hpp"
 
 // In ms, time given to the user to press A/B during device boot
 const uint32_t usb_boot_delay = 3000;
@@ -114,7 +115,6 @@ Button button_a(0), button_b(1), button_x(2), button_y(3);
 #else
 Button button_a(PicoDisplay2::A), button_b(PicoDisplay2::B), button_x(PicoDisplay2::X), button_y(PicoDisplay2::Y);
 #endif
-
 
 // Atari background "blue" and foreground "white", "red" and "green" for indicators,
 // all from the Atari (PAL) palette.
@@ -383,12 +383,6 @@ const option_list option_lists[] = {
 
 uint8_t current_options[option_count-1] = {0};
 
-char curr_path[MAX_PATH_LEN];
-size_t num_files, num_files_page;
-
-char temp_array[MAX_PATH_LEN];
-volatile int16_t create_new_file = 0;
-
 char last_file_name[15] = {0};
 
 typedef struct  __attribute__((__packed__)) {
@@ -402,23 +396,13 @@ typedef struct  __attribute__((__packed__)) {
 const int files_per_page = 12;
 file_entry_type file_entries[files_per_page+2];
 
-int file_entry_cmp(int i, int j) {
+static int file_entry_cmp(int i, int j) {
 	file_entry_type e1 = file_entries[i];
 	file_entry_type e2 = file_entries[j];
 	if (e1.dir && !e2.dir) return -1;
 	else if (!e1.dir && e2.dir) return 1;
 	else return strcasecmp(e1.long_name, e2.long_name);
 }
-
-size_t get_filename_ext(char *filename) {
-	size_t l = strlen(filename);
-	size_t i = l;
-	while(i > 0 && filename[--i] != '.');
-	return (i == 0 || l-i > 4) ? l : i+1;
-}
-
-enum file_type {none, disk, casette};
-file_type ft = file_type::none;
 
 static bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
@@ -451,7 +435,8 @@ uint16_t next_page_references[5464]; // This is 65536 / 12 (files_per_page) with
   or the total number of files for the next display (it should be assertable that result == page_size in this case).
 */
 int32_t read_directory(int32_t page_index, int page_size) {
-	FILINFO fno; DIR dir;
+	FILINFO fno;
+	DIR dir;
 	int32_t ret = -1;
 
 	if(!curr_path[0]) {
@@ -642,7 +627,7 @@ uint turbo_data_pin;
 // Rambit, also needs bit inversion
 //const uint turbo_data_pin = interrupt_pin;
 
-const PIO cas_pio = pio0;
+#define cas_pio pio0
 #define GPIO_FUNC_PIOX GPIO_FUNC_PIO0
 
 uint sm, sm_turbo;
@@ -653,7 +638,7 @@ const uint opt_to_turbo_data_pin[] = {sio_tx_pin, joy2_p4_pin, proceed_pin, inte
 const uint32_t opt_to_turbo_motor_pin_mask[] = {comm_motor_pin_mask, kso_motor_pin_mask, sio_motor_pin_mask, normal_motor_pin_mask};
 const uint32_t opt_to_turbo_motor_pin_val[] = {comm_motor_value_on, kso_motor_value_on, sio_motor_value_on, normal_motor_value_on};
 
-void check_turbo_conf() {
+void reinit_turbo_pio() {
 	if(turbo_conf[0] != current_options[turbo1_option_index]) {
 		if(turbo_conf[0] >= 0) {
 			pio_sm_set_enabled(cas_pio, sm_turbo, false);
@@ -936,7 +921,7 @@ void main_sio_loop(uint sm, uint sm_turbo) {
 			mutex_enter_blocking(&fs_lock);
 			if(/*f_mount(&fatfs[0], (const char *)mounts[i].mount_path, 1) == FR_OK && */ f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
-					check_turbo_conf();
+					reinit_turbo_pio();
 					cas_sample_duration = timing_base_clock/600;
 					cas_size = f_size(&fil);
 					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
@@ -1561,7 +1546,7 @@ void core1_entry() {
 	sm_config_set_clkdiv(&sm_config_turbo, clk_divider);
 	sm_config_set_out_shift(&sm_config_turbo, true, true, 32);
 
-	check_turbo_conf();
+	reinit_turbo_pio();
 
 	dma_channel = dma_claim_unused_channel(true);
 	dma_channel_config dma_c = dma_channel_get_default_config(dma_channel);
@@ -1885,32 +1870,6 @@ int16_t select_new_file_options(int selections, int opt_level) {
 	}
 }
 
-bool mount_file(char *f, int file_entry_index) {
-	int j;
-	if(file_entry_index) {
-		// Prevent the same file to mounted in two different drive slots
-		// (It can work, but it is conceptually wrong to do it.)
-		for(j=1; j<=4; j++) {
-			if(j == file_entry_index)
-				continue;
-			if(!strcmp(mounts[j].mount_path, curr_path))
-				return false;
-		}
-	}
-	mutex_enter_blocking(&mount_lock);
-	mounts[file_entry_index].mounted = true;
-	mounts[file_entry_index].status = 0;
-	strcpy((char *)mounts[file_entry_index].mount_path, curr_path);
-	j = 0;
-	int si = (ft == file_type::disk) ? 3 : 2;
-	while(j<12) {
-		mounts[file_entry_index].str[si+j] = (j < strlen(f) ? f[j] : ' ');
-		j++;
-	}
-	mutex_exit(&mount_lock);
-	return true;
-}
-
 void get_file(int file_entry_index) {
 	int saved_cursor_position = cursor_position;
 
@@ -1921,7 +1880,6 @@ void get_file(int file_entry_index) {
 	main_buttons[0].str = &char_left;
 	uint8_t last_sd_card_file = sd_card_present;
 	while(true) {
-		//loading_pg.init();
 		int32_t r = read_directory(-1, 0);
 		if(r < 0 && curr_path[0]) {
 			//if(sd_card_present)

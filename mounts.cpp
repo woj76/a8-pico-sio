@@ -7,6 +7,7 @@
 #include "ff.h"
 #include "mounts.hpp"
 #include "led_indicator.hpp"
+#include "file_load.hpp"
 
 char d1_mount[MAX_PATH_LEN] = {0};
 char d2_mount[MAX_PATH_LEN] = {0};
@@ -33,6 +34,7 @@ disk_header_type disk_headers[4];
 const size_t sector_buffer_size = 768;
 uint8_t sector_buffer[sector_buffer_size];
 
+file_type ft = file_type::none;
 cas_header_type cas_header;
 
 uint8_t pwm_bit_order;
@@ -52,6 +54,8 @@ uint8_t cas_fsk_bit;
 volatile bool cas_block_turbo;
 volatile FSIZE_t cas_size;
 
+FATFS fatfs[2];
+
 mutex_t fs_lock, mount_lock;
 
 void init_locks() {
@@ -59,7 +63,32 @@ void init_locks() {
 	mutex_init(&mount_lock);
 }
 
-FATFS fatfs[2];
+bool mount_file(char *f, int drive_number) {
+	int j;
+	if(drive_number) {
+		// Prevent the same file to mounted in two different drive slots
+		// (It can work, but it is conceptually wrong to do it.)
+		for(j=1; j<=4; j++) {
+			if(j == drive_number)
+				continue;
+			if(!strcmp(mounts[j].mount_path, curr_path))
+				return false;
+		}
+	}
+	mutex_enter_blocking(&mount_lock);
+	mounts[drive_number].mounted = true;
+	mounts[drive_number].status = 0;
+	strcpy((char *)mounts[drive_number].mount_path, curr_path);
+	j = 0;
+	int si = (ft == file_type::disk) ? 3 : 2;
+	while(j<12) {
+		mounts[drive_number].str[si+j] = (j < strlen(f) ? f[j] : ' ');
+		j++;
+	}
+	mutex_exit(&mount_lock);
+	return true;
+}
+
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset, FSIZE_t brpt) {
 	FIL fil;
