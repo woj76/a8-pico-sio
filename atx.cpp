@@ -5,10 +5,11 @@
 */
 
 #include <string.h>
+#include "pico/time.h"
 #include "pico/rand.h"
 
-#include "config.h"
 #include "atx.hpp"
+
 #include "mounts.hpp"
 #include "disk_counter.h"
 

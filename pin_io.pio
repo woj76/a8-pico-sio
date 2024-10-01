@@ -8,5 +8,5 @@ wait_loop:
 .wrap
 
 %c-sdk {
-const int pio_prog_cycle_corr = 3;
+#define pio_prog_cycle_corr 3
 %}

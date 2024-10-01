@@ -14,3 +14,6 @@
 // Use the PIO based emulated disk rotational counter for the ATX support
 // (This is more of a PIO programming exercise rather than anything else)
 //#define PIO_DISK_COUNTER
+
+// Give core1 more computing priority (not really needed)
+//#define CORE1_PRIORITY

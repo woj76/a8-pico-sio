@@ -1,7 +1,6 @@
 #pragma once
 
-#include "libraries/pico_display_2/pico_display_2.hpp"
-#include "drivers/rgbled/rgbled.hpp"
+#include "config.h"
 
 extern volatile int8_t red_blinks;
 extern volatile int8_t green_blinks;

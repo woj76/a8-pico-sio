@@ -2,6 +2,10 @@
 
 #include "pico/multicore.h"
 
+#include "config.h"
+
+#include "ff.h"
+
 typedef struct {
 	char *str;
 	char *mount_path;
@@ -49,16 +53,13 @@ extern disk_header_type disk_headers[];
 #define disk_type_xex 2
 #define disk_type_atx 3
 
-extern const size_t sector_buffer_size;
+#define sector_buffer_size 768
 extern uint8_t sector_buffer[];
 
 extern cas_header_type cas_header;
 
 extern uint8_t pwm_bit_order;
 extern uint8_t pwm_bit;
-
-extern uint32_t timing_base_clock;
-extern uint32_t max_clock_ms;
 
 extern uint32_t pwm_sample_duration;
 extern uint32_t cas_sample_duration;
@@ -67,7 +68,6 @@ extern uint16_t cas_block_index;
 extern uint16_t cas_block_multiple;
 extern uint8_t cas_fsk_bit;
 
-extern volatile bool cas_block_turbo;
 extern volatile FSIZE_t cas_size;
 
 extern FATFS fatfs[];
@@ -100,7 +100,7 @@ extern const char * const volume_names[];
 extern const char * const str_int_flash;
 extern const char * const str_sd_card;
 
-extern char sd_label[];
+extern char volume_labels[][14];
 
 extern volatile int last_drive;
 extern volatile uint32_t last_drive_access;

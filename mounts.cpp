@@ -4,10 +4,10 @@
 #include "pico/time.h"
 #include "hardware/sync.h"
 
-#include "ff.h"
 #include "mounts.hpp"
 #include "led_indicator.hpp"
 #include "file_load.hpp"
+#include "io.hpp"
 
 char d1_mount[MAX_PATH_LEN] = {0};
 char d2_mount[MAX_PATH_LEN] = {0};
@@ -31,7 +31,6 @@ mounts_type mounts[] = {
 
 disk_header_type disk_headers[4];
 
-const size_t sector_buffer_size = 768;
 uint8_t sector_buffer[sector_buffer_size];
 
 file_type ft = file_type::none;
@@ -40,10 +39,6 @@ cas_header_type cas_header;
 uint8_t pwm_bit_order;
 uint8_t pwm_bit;
 
-// TODO This probably needs to be moved to SIO?
-uint32_t timing_base_clock;
-uint32_t max_clock_ms;
-
 uint32_t pwm_sample_duration; // in cycles dep the base timing value
 uint32_t cas_sample_duration; // in cycles dep the base timing value
 uint16_t silence_duration; // in ms
@@ -51,7 +46,6 @@ uint16_t cas_block_index;
 uint16_t cas_block_multiple;
 uint8_t cas_fsk_bit;
 
-volatile bool cas_block_turbo;
 volatile FSIZE_t cas_size;
 
 FATFS fatfs[2];
@@ -218,15 +212,15 @@ cas_read_forward_exit:
 
 volatile uint8_t sd_card_present = 0;
 const char * const volume_names[] = {"0:", "1:"};
-const char * const str_int_flash = "Int. FLASH";
+const char * const str_int_flash = "Pico FLASH";
 const char * const str_sd_card = "SD/MMC Card";
-char sd_label[12] = {0};
+char volume_labels[2][14] = {"I:           ", "E:           "};
 
 uint8_t try_mount_sd() {
 	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
 		DWORD sn;
-		if(f_getlabel(volume_names[1], sd_label, &sn) != FR_OK || !sd_label[0])
-			strcpy(sd_label, str_sd_card);
+		if(f_getlabel(volume_names[1], &volume_labels[1][2], &sn) != FR_OK || !volume_labels[1][2])
+			strcpy(&volume_labels[1][2], str_sd_card);
 		green_blinks = 4;
 		sd_card_present = 1;
 	}else

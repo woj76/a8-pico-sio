@@ -9,7 +9,9 @@
 
 #include "atx.hpp"
 
-const PIO disk_pio = pio1;
+#include "disk_counter.pio.h"
+
+#define disk_pio pio1
 
 volatile uint32_t disk_counter;
 

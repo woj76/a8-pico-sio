@@ -1,6 +1,7 @@
 #pragma once
 
-#include "pico/time.h"
+#include "config.h"
+
 #include "ff.h"
 
 extern const uint au_full_rotation;

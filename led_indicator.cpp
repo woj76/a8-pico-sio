@@ -1,5 +1,7 @@
 #include "pico/time.h"
 #include "hardware/sync.h"
+#include "libraries/pico_display_2/pico_display_2.hpp"
+#include "drivers/rgbled/rgbled.hpp"
 
 #include "led_indicator.hpp"
 
