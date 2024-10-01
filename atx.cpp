@@ -11,7 +11,7 @@
 #include "atx.hpp"
 
 #include "mounts.hpp"
-#include "disk_counter.h"
+#include "disk_counter.hpp"
 
 const uint16_t atx_version = 0x01;
 const size_t max_track = 42;

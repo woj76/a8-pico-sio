@@ -1,4 +1,4 @@
-#include "disk_counter.h"
+#include "disk_counter.hpp"
 
 #ifdef PIO_DISK_COUNTER
 
