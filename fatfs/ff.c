@@ -2681,6 +2681,10 @@ static void get_fileinfo (
 				if (nw == 0) {				/* Buffer overflow or wrong char? */
 					di = 0; break;
 				}
+				if(nw == 2) {
+					fno->fname[di] = '?';
+					nw = 1;
+				}
 				di += nw;
 				hs = 0;
 			}
@@ -2861,7 +2865,8 @@ static FRESULT create_name (	/* FR_OK: successful, FR_INVALID_NAME: could not cr
 	/* Create LFN into LFN working buffer */
 	p = *path; lfn = dp->obj.fs->lfnbuf; di = 0;
 	for (;;) {
-		uc = tchar2uni(&p);			/* Get a character */
+		// uc = tchar2uni(&p);			/* Get a character */
+		uc = *p++;
 		if (uc == 0xFFFFFFFF) return FR_INVALID_NAME;		/* Invalid code or UTF decode error */
 		if (uc >= 0x10000) lfn[di++] = (WCHAR)(uc >> 16);	/* Store high surrogate if needed */
 		wc = (WCHAR)uc;
@@ -2924,6 +2929,7 @@ static FRESULT create_name (	/* FR_OK: successful, FR_INVALID_NAME: could not cr
 			continue;
 		}
 
+#if 0
 		if (wc >= 0x80) {	/* Is this an extended character? */
 			cf |= NS_LFN;	/* LFN entry needs to be created */
 #if FF_CODE_PAGE == 0
@@ -2940,6 +2946,7 @@ static FRESULT create_name (	/* FR_OK: successful, FR_INVALID_NAME: could not cr
 			wc = ff_uni2oem(ff_wtoupper(wc), CODEPAGE);	/* Unicode ==> Up-convert ==> ANSI/OEM code */
 #endif
 		}
+#endif
 
 		if (wc >= 0x100) {				/* Is this a DBC? */
 			if (i >= ni - 1) {			/* Field overflow? */
@@ -7081,4 +7088,3 @@ FRESULT f_setcp (
 	return FR_OK;
 }
 #endif	/* FF_CODE_PAGE == 0 */
-

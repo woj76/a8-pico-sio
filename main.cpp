@@ -370,7 +370,7 @@ const file_type menu_to_type[] = {
 	file_type::none // About
 };
 
-// char txt_buf[25] = {0};
+//char txt_buf[25] = {0};
 
 typedef struct {
 	char *str;
@@ -853,8 +853,9 @@ void get_file(int file_entry_index) {
 								st7789.update(&graphics);
 								if(!create_new_file) {
 									strcpy(last_file_name, f);
-									if(!mount_file(f, file_entry_index))
-										red_blinks = 2;
+									mount_file(f, file_entry_index);
+									//if(!mount_file(f, file_entry_index))
+									//	red_blinks = 2;
 
 								} else
 									print_text_wait(str_create_failed);
@@ -884,8 +885,9 @@ void get_file(int file_entry_index) {
 					} else {
 						strcpy(&curr_path[i], f);
 						strcpy(last_file_name, f);
-						if(!mount_file(f, file_entry_index))
-							red_blinks = 2;
+						mount_file(f, file_entry_index);
+						//if(!mount_file(f, file_entry_index))
+						//	red_blinks = 2;
 						curr_path[i] = 0;
 						goto get_file_exit;
 					}

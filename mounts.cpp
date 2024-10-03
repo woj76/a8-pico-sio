@@ -58,30 +58,34 @@ void init_locks() {
 	mutex_init(&mount_lock);
 }
 
-bool mount_file(char *f, int drive_number) {
+void mount_file(char *f, int drive_number) {
 	int j;
+	bool read_only = false;
 	if(drive_number) {
 		// Prevent the same file to mounted in two different drive slots
-		// (It can work, but it is conceptually wrong to do it.)
+		// in write mode (It can work, but it is conceptually wrong to do it.)
 		for(j=1; j<=4; j++) {
 			if(j == drive_number)
 				continue;
-			if(!strcmp(mounts[j].mount_path, curr_path))
-				return false;
+			if(!strcmp(mounts[j].mount_path, curr_path)){
+				read_only = true;
+				break;
+			}
 		}
 	}
 	mutex_enter_blocking(&mount_lock);
+	if(read_only)
+		disk_headers[drive_number-1].atr_header.flags |= 0x01;
 	mounts[drive_number].mounted = true;
 	mounts[drive_number].status = 0;
 	strcpy((char *)mounts[drive_number].mount_path, curr_path);
 	j = 0;
 	int si = (ft == file_type::disk) ? 3 : 2;
 	while(j<12) {
-		mounts[drive_number].str[si+j] = (j < strlen(f) ? f[j] : ' ');
+		mounts[drive_number].str[si+j] = (j < strlen(f) ? (f[j] < 0x80 ? f[j] : '_') : ' ');
 		j++;
 	}
 	mutex_exit(&mount_lock);
-	return true;
 }
 
 
