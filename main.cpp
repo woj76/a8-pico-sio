@@ -370,7 +370,7 @@ const file_type menu_to_type[] = {
 	file_type::none // About
 };
 
-//char txt_buf[25] = {0};
+// char txt_buf[25] = {0};
 
 typedef struct {
 	char *str;
@@ -1173,11 +1173,10 @@ int main() {
 	tud_mount_cb();
 
 	f_mount(&fatfs[0], volume_names[0], 1);
-	DWORD sn;
-	if(f_getlabel(volume_names[0], &volume_labels[0][2], &sn) != FR_OK || !volume_labels[0][2])
-		strcpy(&volume_labels[0][2], str_int_flash);
+	get_drive_label(0);
 
-
+	// This is initialized in SD card code, but we need it earlier just in case
+	// there is no sign of the SD card or even the reader
 	gpio_init(9); gpio_set_dir(9, GPIO_IN);
 	// gpio_pull_up(9); // Pulled up in hardware
 
@@ -1291,7 +1290,6 @@ int main() {
 		update_main_menu_buttons();
 
 /*
-
 		sprintf(txt_buf, " %d %d", f_mount_result, sd_card_present);
 		text_location.x = 0;
 		text_location.y = 0;
@@ -1299,9 +1297,10 @@ int main() {
 		graphics.set_pen(BG);
 		graphics.rectangle(rt);
 		print_text(txt_buf);
+*/
 //		text_location.y += 16;
 //		print_text(&txt_buf[20]);
-*/
+
 
 		if(to_ms_since_boot(get_absolute_time()) - last_drive_access > (last_drive == 0 ? 25000 : 2000))
 			last_drive = -1;

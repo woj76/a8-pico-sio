@@ -194,8 +194,10 @@ int16_t create_new_disk_image() {
 			ind += 4;
 			bool nrb = (bs & 0x80000000) ? true : false;
 			bs &= 0x7FFFFFFF;
+			UINT wrt;
 			while(bs > 0) {
-				if(f_putc(sector_buffer[ind], &fil) == -1) {
+//				if(f_putc(sector_buffer[ind], &fil) == -1) {
+				if(f_write(&fil, &sector_buffer[ind], 1, &wrt) != FR_OK || wrt != 1) {
 					f_op_stat = FR_INT_ERR;
 					break;
 				}

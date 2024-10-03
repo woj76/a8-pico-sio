@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdio.h>
 
 #include "pico/multicore.h"
 #include "pico/time.h"
@@ -216,11 +217,18 @@ const char * const str_int_flash = "Pico FLASH";
 const char * const str_sd_card = "SD/MMC Card";
 char volume_labels[2][14] = {"I:           ", "E:           "};
 
+void get_drive_label(int i) {
+	DWORD sn;
+	if(f_getlabel(volume_names[i], &volume_labels[i][2], &sn) == FR_OK) {
+		if(!volume_labels[i][2])
+			sprintf(&volume_labels[i][2], "%04X-%04X", (sn >> 16) & 0xFFFF, sn & 0xFFFF);
+	} else
+		strcpy(&volume_labels[i][2], i ? str_sd_card : str_int_flash);
+}
+
 uint8_t try_mount_sd() {
 	if(f_mount(&fatfs[1], volume_names[1], 1) == FR_OK) {
-		DWORD sn;
-		if(f_getlabel(volume_names[1], &volume_labels[1][2], &sn) != FR_OK || !volume_labels[1][2])
-			strcpy(&volume_labels[1][2], str_sd_card);
+		get_drive_label(1);
 		green_blinks = 4;
 		sd_card_present = 1;
 	}else

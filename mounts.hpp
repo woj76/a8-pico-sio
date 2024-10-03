@@ -86,6 +86,8 @@ void init_locks();
 #define cas_header_pwmd 0x646D7770
 #define cas_header_pwml 0x6C6D7770
 
+void get_drive_label(int i);
+
 uint8_t try_mount_sd();
 
 bool mount_file(char *f, int drive_number);

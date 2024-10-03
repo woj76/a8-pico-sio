@@ -2695,7 +2695,7 @@ static void get_fileinfo (
 		if (wc == ' ') continue;	/* Skip padding spaces */
 		if (wc == RDDEM) wc = DDEM;	/* Restore replaced DDEM character */
 		if (si == 9 && di < FF_SFN_BUF) fno->altname[di++] = '.';	/* Insert a . if extension is exist */
-#if FF_LFN_UNICODE >= 1	/* Unicode output */
+#if 0 // FF_LFN_UNICODE >= 1	/* Unicode output */
 		if (dbc_1st((BYTE)wc) && si != 8 && si != 11 && dbc_2nd(dp->dir[si])) {	/* Make a DBC if needed */
 			wc = wc << 8 | dp->dir[si++];
 		}
