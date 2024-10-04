@@ -58,7 +58,7 @@ void init_locks() {
 	mutex_init(&mount_lock);
 }
 
-void mount_file(char *f, int drive_number) {
+void mount_file(char *f, int drive_number, char *lfn) {
 	int j;
 	bool read_only = false;
 	if(drive_number) {
@@ -81,10 +81,20 @@ void mount_file(char *f, int drive_number) {
 	strcpy((char *)mounts[drive_number].mount_path, curr_path);
 	j = 0;
 	int si = (ft == file_type::disk) ? 3 : 2;
+	size_t size_lfn = strlen(lfn);
+	strcpy(&mounts[drive_number].str[si+8], &lfn[size_lfn-4]);
+	while(j<8) {
+		mounts[drive_number].str[si+j] = (j < size_lfn ? lfn[j] : ' ');
+		j++;
+	}
+	if(size_lfn > 12)
+		mounts[drive_number].str[si+7] = '~';
+/*
 	while(j<12) {
 		mounts[drive_number].str[si+j] = (j < strlen(f) ? (f[j] < 0x80 ? f[j] : '_') : ' ');
 		j++;
 	}
+*/
 	mutex_exit(&mount_lock);
 }
 
@@ -226,6 +236,9 @@ void get_drive_label(int i) {
 	if(f_getlabel(volume_names[i], &volume_labels[i][2], &sn) == FR_OK) {
 		if(!volume_labels[i][2])
 			sprintf(&volume_labels[i][2], "%04X-%04X", (sn >> 16) & 0xFFFF, sn & 0xFFFF);
+		else
+			for(int j=0; j<strlen(volume_labels[j]); j++)
+				if(volume_labels[i][j] >= 0x80) volume_labels[i][j] = '?';
 	} else
 		strcpy(&volume_labels[i][2], i ? str_sd_card : str_int_flash);
 }

@@ -25,7 +25,9 @@ static int file_entry_cmp(int i, int j) {
 	file_entry_type e2 = file_entries[j];
 	if (e1.dir && !e2.dir) return -1;
 	else if (!e1.dir && e2.dir) return 1;
-	else return strcasecmp(e1.long_name, e2.long_name);
+	// Short names are a bit worse to use for comparison, but with the current
+	// setup they are the only ones guaranteed not to have duplicates in the list
+	else return strcasecmp(e1.short_name, e2.short_name);
 }
 
 static bool is_valid_file(char *filename) {

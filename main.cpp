@@ -853,7 +853,7 @@ void get_file(int file_entry_index) {
 								st7789.update(&graphics);
 								if(!create_new_file) {
 									strcpy(last_file_name, f);
-									mount_file(f, file_entry_index);
+									mount_file(f, file_entry_index, f);
 									//if(!mount_file(f, file_entry_index))
 									//	red_blinks = 2;
 
@@ -885,7 +885,7 @@ void get_file(int file_entry_index) {
 					} else {
 						strcpy(&curr_path[i], f);
 						strcpy(last_file_name, f);
-						mount_file(f, file_entry_index);
+						mount_file(f, file_entry_index, file_entries[fi].long_name);
 						//if(!mount_file(f, file_entry_index))
 						//	red_blinks = 2;
 						curr_path[i] = 0;

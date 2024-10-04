@@ -90,7 +90,7 @@ void get_drive_label(int i);
 
 uint8_t try_mount_sd();
 
-void mount_file(char *f, int drive_number);
+void mount_file(char *f, int drive_number, char *lfn);
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset=0, FSIZE_t brpt=1);
 
