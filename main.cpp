@@ -1114,7 +1114,7 @@ void show_about() {
 #endif
 	text_location.x = str_x(strlen(temp_array));
 	text_location.y += 10*font_scale;
-	print_text(temp_array);
+	print_text(std::string_view(temp_array));
 	st7789.update(&graphics);
 	while(!(button_a.read() || button_b.read() || button_x.read() || button_y.read())) tight_loop_contents();
 }
