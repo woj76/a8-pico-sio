@@ -81,13 +81,13 @@ void mount_file(char *f, int drive_number, char *lfn) {
 	strcpy((char *)mounts[drive_number].mount_path, curr_path);
 	j = 0;
 	int si = (ft == file_type::disk) ? 3 : 2;
-	size_t size_lfn = strlen(lfn);
-	strcpy(&mounts[drive_number].str[si+8], &lfn[size_lfn-4]);
+	size_t size_lfn = strlen(lfn)-4;
+	strcpy(&mounts[drive_number].str[si+8], &lfn[size_lfn]);
 	while(j<8) {
 		mounts[drive_number].str[si+j] = (j < size_lfn ? lfn[j] : ' ');
 		j++;
 	}
-	if(size_lfn > 12)
+	if(size_lfn > 8)
 		mounts[drive_number].str[si+7] = '~';
 /*
 	while(j<12) {

@@ -171,10 +171,10 @@ void usb_drive() {
 size_t scroll_length, scroll_size, scroll_index;
 int scroll_x, scroll_y, scroll_d, scroll_fine;
 
-std::string *ptr_str_file_name;
-std::string *scroll_ptr = nullptr;
+std::string_view *ptr_str_file_name;
+std::string_view *scroll_ptr = nullptr;
 
-void init_scroll_long_filename(std::string *s_ptr, int s_x, int s_y, size_t s_size, size_t s_length) {
+void init_scroll_long_filename(std::string_view *s_ptr, int s_x, int s_y, size_t s_size, size_t s_length) {
 	scroll_ptr = s_ptr;
 	scroll_x = s_x;
 	scroll_y = s_y;
@@ -470,16 +470,21 @@ void update_main_menu() {
 	}
 }
 
-std::string str_fit(13,' ');
+//std::string str_fit(13,' ');
+static char str_fit[13];
 
-void fit_str(char *s, int sl, int l) {
+void fit_str(const char strr[], int sl, int l) {
+	//memset(str_fit, 0, 13);
 	int h = l/2;
 	int i;
-	for(i=0; i < h; i++) str_fit[i] = s[i];
+	for(i=0; i < h; i++) str_fit[i] = strr[i];
 	str_fit[i++] = '~';
 	int j = sl - h + 1;
-	while(i<l) str_fit[i++] = s[j++];
-	str_fit[i] = 0;
+	// No idea why the compiler gives this warning
+	//#pragma GCC diagnostic ignored "-Wstringop-overflow"
+	//while(i<l) str_fit[i++] = strr[j++];
+	strncpy(&str_fit[i], &strr[j], l-i);
+	str_fit[l] = 0;
 }
 
 void update_one_display_file(int i, int fi) {
@@ -490,15 +495,15 @@ void update_one_display_file(int i, int fi) {
 	if (file_entries[fi].dir) {
 		if(!ext) pe = 12;
 		if(ei < pe) pe = ei;
-		std::string s2(&f[ei]);
+		std::string_view s2(&f[ei]);
 		text_location.x += pe*8*font_scale;
 		print_text(s2, i == cursor_position ? s2.size() : 0);
 		text_location.x -= pe*8*font_scale;
 	} else {
 		text_location.x += 8*8*font_scale;
-		if(ext)
-			print_text(std::string(&f[ei]), i == cursor_position ? 4 : 0);
-		else {
+		if(ext){
+			print_text(std::string_view(&f[ei]), i == cursor_position ? 4 : 0);
+		}else {
 			if(i == cursor_position)
 				print_text("    ", 4);
 			ei++;
@@ -507,18 +512,18 @@ void update_one_display_file(int i, int fi) {
 	}
 	if(i != cursor_position && ei > pe) {
 		fit_str(f, ei, pe);
-		ptr_str_file_name = &str_fit;
 		ei = pe;
+		ptr_str_file_name = new std::string_view(str_fit, ei);
 		pe = 0;
 	}else
-		ptr_str_file_name = new std::string(f, ei);
+		ptr_str_file_name = new std::string_view(f, ei);
 	if(i == cursor_position) {
 		print_text((*ptr_str_file_name).substr(0,pe), pe);
 		if(ei > pe) {
 			init_scroll_long_filename(ptr_str_file_name, text_location.x, text_location.y, pe, ei);
 			pe = 0;
 		}
-	} else
+	}else
 		print_text(*ptr_str_file_name);
 	if(pe)
 		delete ptr_str_file_name;
@@ -839,7 +844,7 @@ void get_file(int file_entry_index) {
 							char *f = &curr_path[i];
 							text_location.x = 4*8*font_scale;
 							text_location.y = 8*font_scale;
-							print_text(f);
+							print_text(std::string_view(f));
 							int16_t cnf = select_new_file_options(0, 0);
 							if(cnf) {
 								text_location.x = str_x(str_creating.size());
@@ -1180,13 +1185,14 @@ int main() {
 	// This is initialized in SD card code, but we need it earlier just in case
 	// there is no sign of the SD card or even the reader
 	gpio_init(9); gpio_set_dir(9, GPIO_IN);
-	// gpio_pull_up(9); // Pulled up in hardware
+	//gpio_pull_up(9); // Pulled up in hardware
 
 	// It is vital to check the card presence pin first and not to attempt
 	// mounting if the card is not there. This is important for the setup
 	// where there is no SD card reader and the display is connected
 	// to the SPI1 pins
 	if(!gpio_get(9) || !try_mount_sd())
+	//if(!try_mount_sd())
 		blue_blinks = 4;
 
 	if(!sd_card_present && curr_path[0] == '1')
@@ -1292,7 +1298,7 @@ int main() {
 		update_main_menu_buttons();
 
 /*
-		sprintf(txt_buf, " %d %d", f_mount_result, sd_card_present);
+		sprintf(txt_buf, "%d", turbo_data_pin);
 		text_location.x = 0;
 		text_location.y = 0;
 		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*16);
@@ -1300,6 +1306,7 @@ int main() {
 		graphics.rectangle(rt);
 		print_text(txt_buf);
 */
+
 //		text_location.y += 16;
 //		print_text(&txt_buf[20]);
 

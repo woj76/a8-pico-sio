@@ -996,7 +996,7 @@ bool sd_init_driver() {
             if (pSD->use_card_detect) {
                 gpio_init(pSD->card_detect_gpio);
 		// This is done in hardware with a 47K resistor
-                // gpio_pull_up(pSD->card_detect_gpio);
+                //gpio_pull_up(pSD->card_detect_gpio);
                 gpio_set_dir(pSD->card_detect_gpio, GPIO_IN);
             }
 	    /*
