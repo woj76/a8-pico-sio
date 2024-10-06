@@ -316,7 +316,8 @@ void main_sio_loop() {
 			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted || last_access_error[drive_number])
 				goto ignore_sio_command_frame;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
-			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
+			if(turbo_data_pin == sio_rx_pin)
+				gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 			memset(sector_buffer, 0, sector_buffer_size);
 			blue_blinks = (high_speed == 1) ? -1 : 0;
 			update_rgb_led(false);

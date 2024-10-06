@@ -9,7 +9,7 @@
 
 // extern const uint led_pin;
 
-// extern uint turbo_data_pin;
+extern uint turbo_data_pin;
 
 extern const uint sio_tx_pin;
 extern const uint sio_rx_pin;

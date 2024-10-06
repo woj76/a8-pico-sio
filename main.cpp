@@ -531,7 +531,7 @@ void update_one_display_file(int i, int fi) {
 
 void update_one_display_file2(int page_index, int shift_index, int i) {
 	if(!curr_path[0]) {
-		print_text(volume_labels[i], (i == cursor_position) ? 13 : 0);
+		print_text(std::string_view(volume_labels[i]), (i == cursor_position) ? 13 : 0);
 	} else if(!page_index && i < shift_index) {
 		bool new_image_label = (!i && ft == file_type::disk);
 		const std::string_view& s = new_image_label ? str_new_image : str_up_dir;
