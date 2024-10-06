@@ -921,7 +921,7 @@ void update_selection_entry(const char **opt_names, int i, bool erase) {
 		Rect r(text_location.x,text_location.y,16*8*font_scale,8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
 	}
-	print_text(opt_names[i], i==cursor_position ? 16 : 0);
+	print_text(std::string_view(opt_names[i]), i==cursor_position ? 16 : 0);
 }
 
 void update_selections(const char **opt_names, int opt_count) {
@@ -994,7 +994,7 @@ void update_options_entry(int i, bool erase) {
 	print_text(option_names[i], i==cursor_position ? option_names[i].size() : 0);
 	if(i != option_count) {
 		text_location.x += option_names[i].size()*8*font_scale;
-		print_text(option_lists[i].short_names[current_options[i]], i==cursor_position ? 5 : 0);
+		print_text(std::string_view(option_lists[i].short_names[current_options[i]]), i==cursor_position ? 5 : 0);
 	}
 }
 

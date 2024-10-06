@@ -643,7 +643,8 @@ ignore_sio_command_frame:
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
-			gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
+			if(turbo_data_pin == sio_tx_pin)
+				gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
 			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
 			while(silence_duration > 0) {
 				uint16_t silence_block_len = silence_duration;
