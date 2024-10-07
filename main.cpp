@@ -50,7 +50,7 @@ constexpr std::string_view str_press_1{"USB drive"};
 constexpr std::string_view str_press_2{"Config reset"};
 
 constexpr std::string_view str_up_dir{"../"};
-constexpr std::string_view str_new_image{"New image...>"};
+constexpr std::string_view str_new_image{"New image... ->"};
 
 constexpr std::string_view str_no_files{"[No files!]"};
 constexpr std::string_view str_no_media{"No media!?"};
@@ -470,45 +470,33 @@ void update_main_menu() {
 	}
 }
 
-//std::string str_fit(13,' ');
-static char str_fit[13];
+static char str_fit[17];
 
-void fit_str(const char strr[], int sl, int l) {
-	//memset(str_fit, 0, 13);
+void fit_str(const char s[], int sl, int l) {
 	int h = l/2;
-	int i;
-	for(i=0; i < h; i++) str_fit[i] = strr[i];
-	str_fit[i++] = '~';
-	int j = sl - h + 1;
-	// No idea why the compiler gives this warning
-	//#pragma GCC diagnostic ignored "-Wstringop-overflow"
-	//while(i<l) str_fit[i++] = strr[j++];
-	strncpy(&str_fit[i], &strr[j], l-i);
+	strncpy(&str_fit[0], &s[0], h);
+	str_fit[h] = '~';
+	strncpy(&str_fit[h+1], &s[sl-h+1-(l&1)], l-h-1);
 	str_fit[l] = 0;
 }
 
 void update_one_display_file(int i, int fi) {
 	char *f = file_entries[fi].long_name;
-	size_t ei = get_filename_ext(f) - 1;
-	bool ext = (f[ei] == '.');
-	int pe = 8;
+	size_t ei;
+	int pe;
 	if (file_entries[fi].dir) {
-		if(!ext) pe = 12;
+		ei = strlen(f) - 1;
+		pe = 16;
 		if(ei < pe) pe = ei;
-		std::string_view s2(&f[ei]);
 		text_location.x += pe*8*font_scale;
-		print_text(s2, i == cursor_position ? s2.size() : 0);
+		print_text(std::string_view("/"), i == cursor_position ? 1 : 0);
 		text_location.x -= pe*8*font_scale;
 	} else {
-		text_location.x += 8*8*font_scale;
-		if(ext){
-			print_text(std::string_view(&f[ei]), i == cursor_position ? 4 : 0);
-		}else {
-			if(i == cursor_position)
-				print_text("    ", 4);
-			ei++;
-		}
-		text_location.x -= 8*8*font_scale;
+		ei = get_filename_ext(f) - 1;
+		pe = 13;
+		text_location.x += pe*8*font_scale;
+		print_text(std::string_view(&f[ei]), i == cursor_position ? 4 : 0);
+		text_location.x -= pe*8*font_scale;
 	}
 	if(i != cursor_position && ei > pe) {
 		fit_str(f, ei, pe);
@@ -531,13 +519,13 @@ void update_one_display_file(int i, int fi) {
 
 void update_one_display_file2(int page_index, int shift_index, int i) {
 	if(!curr_path[0]) {
-		print_text(std::string_view(volume_labels[i]), (i == cursor_position) ? 13 : 0);
+		print_text(std::string_view(volume_labels[i]), (i == cursor_position) ? 16 : 0);
 	} else if(!page_index && i < shift_index) {
 		bool new_image_label = (!i && ft == file_type::disk);
 		const std::string_view& s = new_image_label ? str_new_image : str_up_dir;
 		if(new_image_label) {
 			text_location.y -= 8*font_scale;
-			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
+			Rect r(text_location.x,text_location.y,17*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 		}
 		print_text(s, (i == cursor_position) ? s.size() : 0);
@@ -547,9 +535,9 @@ void update_one_display_file2(int page_index, int shift_index, int i) {
 
 void update_display_files(int page_index, int shift_index) {
 	scroll_length = 0;
-	text_location.x = (3*8+4)*font_scale;
+	text_location.x = (8+4)*font_scale;
 	if(cursor_prev == -1) {
-		Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,(num_files ? max_files_per_page+1 : 2)*8*font_scale);
+		Rect r(text_location.x,8*font_scale,17*8*font_scale,(num_files ? max_files_per_page+1 : 2)*8*font_scale);
 		graphics.set_pen(BG); graphics.rectangle(r);
 		for(int i = 0; i < num_files_page; i++) {
 			text_location.y = 8*(2+i)*font_scale;
@@ -559,7 +547,7 @@ void update_display_files(int page_index, int shift_index) {
 		int i = cursor_prev;
 		while(true) {
 			text_location.y = 8*(2+i)*font_scale;
-			Rect r(text_location.x,text_location.y,13*8*font_scale,8*font_scale);
+			Rect r(text_location.x,text_location.y,17*8*font_scale,8*font_scale);
 			graphics.set_pen(BG); graphics.rectangle(r);
 			update_one_display_file2(page_index, shift_index, i);
 			if(i == cursor_position)
@@ -688,6 +676,7 @@ void get_file(int file_entry_index) {
 		if(r < 0 && curr_path[0]) {
 			//if(sd_card_present)
 				curr_path[0] = 0;
+				cursor_position = 0;
 			//else
 			//	strcpy(curr_path, volume_names[0]);
 			last_file_name[0] = 0;
@@ -839,7 +828,7 @@ void get_file(int file_entry_index) {
 						mutex_exit(&fs_lock);
 						if(fn == 10001) {
 							graphics.set_pen(BG); graphics.rectangle(scroll_bar);
-							Rect r(2*8*font_scale,8*font_scale,16*8*font_scale,(max_files_per_page+1)*8*font_scale);
+							Rect r((8+4)*font_scale,8*font_scale,17*8*font_scale,(max_files_per_page+1)*8*font_scale);
 							graphics.rectangle(r);
 							char *f = &curr_path[i];
 							text_location.x = 4*8*font_scale;

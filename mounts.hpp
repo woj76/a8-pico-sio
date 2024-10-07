@@ -102,7 +102,7 @@ extern const char * const volume_names[];
 extern const char * const str_int_flash;
 extern const char * const str_sd_card;
 
-extern char volume_labels[][14];
+extern char volume_labels[][17];
 
 extern volatile int last_drive;
 extern volatile uint32_t last_drive_access;

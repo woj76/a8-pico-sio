@@ -146,7 +146,7 @@ int32_t read_directory(int32_t page_index, int page_size) {
 		//f_mount(0, curr_path, 1);
 	//}
 	mutex_exit(&fs_lock);
-	// sleep_ms(2000); // For testing to emulate long directory reading
+	// sleep_ms(3000); // For testing to emulate long directory reading
 	return ret;
 }
 

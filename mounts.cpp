@@ -229,18 +229,18 @@ volatile uint8_t sd_card_present = 0;
 const char * const volume_names[] = {"0:", "1:"};
 const char * const str_int_flash = "Pico FLASH";
 const char * const str_sd_card = "SD/MMC Card";
-char volume_labels[2][14] = {"I:           ", "E:           "};
+char volume_labels[2][17] = {"Int:            ", "Ext:            "};
 
 void get_drive_label(int i) {
 	DWORD sn;
-	if(f_getlabel(volume_names[i], &volume_labels[i][2], &sn) == FR_OK) {
-		if(!volume_labels[i][2])
-			sprintf(&volume_labels[i][2], "%04X-%04X", (sn >> 16) & 0xFFFF, sn & 0xFFFF);
+	if(f_getlabel(volume_names[i], &volume_labels[i][5], &sn) == FR_OK) {
+		if(!volume_labels[i][5])
+			sprintf(&volume_labels[i][5], "%04X-%04X", (sn >> 16) & 0xFFFF, sn & 0xFFFF);
 		else
 			for(int j=0; j<strlen(volume_labels[j]); j++)
 				if(volume_labels[i][j] >= 0x80) volume_labels[i][j] = '?';
 	} else
-		strcpy(&volume_labels[i][2], i ? str_sd_card : str_int_flash);
+		strcpy(&volume_labels[i][5], i ? str_sd_card : str_int_flash);
 }
 
 uint8_t try_mount_sd() {
