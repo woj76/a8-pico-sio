@@ -9,7 +9,7 @@
 // State of the pin to detect motor on, should be 0 or 1 depending if
 // connected through a NOT gate transistor (needed for Pico 2 to function properly)
 // 0 for the NOT gate present
-#define MOTOR_ON_STATE 0u
+#define MOTOR_ON_STATE 1u
 
 // Use the PIO based emulated disk rotational counter for the ATX support
 // (This is more of a PIO programming exercise rather than anything else)

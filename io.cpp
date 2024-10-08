@@ -80,7 +80,8 @@ void reinit_turbo_pio() {
 	if(turbo_conf[0] != current_options[turbo1_option_index]) {
 		if(turbo_conf[0] >= 0) {
 			pio_sm_set_enabled(cas_pio, sm_turbo, false);
-			gpio_set_function(turbo_data_pin, turbo_data_pin == sio_rx_pin ? GPIO_FUNC_UART : GPIO_FUNC_NULL);
+			//gpio_set_function(turbo_data_pin, turbo_data_pin == sio_rx_pin ? GPIO_FUNC_UART : GPIO_FUNC_NULL);
+			gpio_set_function(turbo_data_pin, GPIO_FUNC_NULL);
 		}
 		turbo_conf[0] = current_options[turbo1_option_index];
 		turbo_data_pin = opt_to_turbo_data_pin[turbo_conf[0]];

@@ -31,7 +31,7 @@ const uint8_t percom_table[] = {
 #include "boot_loader.h"
 
 const uint8_t boot_reloc_locs[] = {0x03, 0x0a, 0x0d, 0x12, 0x17, 0x1a, 0x21, 0x2c, 0x33, 0x3e, 0x44, 0x5c, 0x6b, 0x6e, 0x7f, 0x82, 0x87, 0x98, 0x9b, 0xa2, 0xa7, 0xae, 0xb2};
-const int8_t boot_reloc_delta[] = {0, -2, -1, 1, 2, 3};
+const int8_t boot_reloc_delta[] = {-2, -1, 0, 1, 2, 3};
 #define boot_reloc_locs_size  23
 
 volatile int8_t high_speed = -1;
@@ -316,8 +316,7 @@ void main_sio_loop() {
 			if(drive_number < 1 || drive_number > 4 || !mounts[drive_number].mounted || last_access_error[drive_number])
 				goto ignore_sio_command_frame;
 			sleep_us(100); // Needed for BiboDos according to atari_drive_emulator.c
-			if(turbo_data_pin == sio_rx_pin)
-				gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
+			gpio_set_function(sio_tx_pin, GPIO_FUNC_UART);
 			memset(sector_buffer, 0, sector_buffer_size);
 			blue_blinks = (high_speed == 1) ? -1 : 0;
 			update_rgb_led(false);
@@ -643,8 +642,7 @@ ignore_sio_command_frame:
 			offset += to_read;
 			cas_block_index += to_read;
 			mounts[0].status = offset;
-			if(turbo_data_pin == sio_tx_pin)
-				gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
+			gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
 			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
 			while(silence_duration > 0) {
 				uint16_t silence_block_len = silence_duration;
