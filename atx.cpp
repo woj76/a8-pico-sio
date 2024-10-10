@@ -311,7 +311,6 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 							if(is1050 ? (ext_sector_size > act_sector_size) : (ext_sector_size < act_sector_size))
 								act_sector_size = ext_sector_size;
 						}
-						break;
 					}
 					currentFileOffset += extSectorData->size;
 				}
