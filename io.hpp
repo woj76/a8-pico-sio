@@ -18,7 +18,7 @@ extern const uint command_line_pin;
 extern const uint proceed_pin;
 extern const uint interrupt_pin;
 extern const uint joy2_p1_pin;
-extern const uint joy2_p3_pin;
+extern const uint joy2_p2_pin;
 extern const uint joy2_p4_pin;
 
 extern const uint32_t normal_motor_pin_mask;

@@ -97,12 +97,34 @@ Button button_a(0), button_b(1), button_x(2), button_y(3);
 Button button_a(PicoDisplay2::A), button_b(PicoDisplay2::B), button_x(PicoDisplay2::X), button_y(PicoDisplay2::Y);
 #endif
 
-// Atari background "blue" and foreground "white", "red" and "green" for indicators,
-// all from the Atari (PAL) palette.
 const Pen
-	BG=graphics.create_pen(0, 0x5F, 0x8A), WHITE=graphics.create_pen(0x5D, 0xC1, 0xEC),
-	GREEN=graphics.create_pen(0x85,0xA0,0), RED=graphics.create_pen(0x96,0x27,0x16);
+	BG=graphics.create_pen(0x00, 0x00, 0x00), WHITE=graphics.create_pen(0xA4, 0xA4, 0xA4),
+	GREEN=graphics.create_pen(0x00, 0x00, 0x00), RED=graphics.create_pen(0x00, 0x00, 0x00);
 
+
+void update_colors() {
+	if(current_options[clock_option_index]) {
+		// NTSC
+		// Atari $94
+		graphics.update_pen(BG, 0x00, 0x42, 0xB0);
+		// Atari $9A
+		graphics.update_pen(WHITE, 0x5D, 0xAC, 0xFF);
+		// Atari $C8
+		graphics.update_pen(GREEN, 0x28, 0xB5, 0x20);
+		// Atari $34
+		graphics.update_pen(RED, 0x93, 0x13, 0x02);
+	}else{
+		// PAL
+		// Atari $94
+		graphics.update_pen(BG, 0x00, 0x66, 0x76);
+		// Atari $9A
+		graphics.update_pen(WHITE, 0x58, 0xC8, 0xD8);
+		// Atari $C8
+		graphics.update_pen(GREEN, 0x63, 0xAF, 0x00);
+		// Atari $24
+		graphics.update_pen(RED, 0x96, 0x27, 0x16);
+	}
+}
 
 void print_text(const std::string_view &t, int inverse=0) {
 	graphics.set_pen(WHITE);
@@ -305,8 +327,8 @@ const char * const xex_option_names_short[] = {" $500", " $600", " $700", " $800
 const char * const xex_option_names_long[] = {"Loader at $500", "Loader at $600", "Loader at $700", "Loader at $800", "Loader at $900", "Loader at $A00"};
 const char * const turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
 const char * const turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
-const char * const turbo2_option_names_short[] = {" COMM", " J2P3", "  SIO", " NONE"};
-const char * const turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 3", "SIO Data Out", "None / Motor"};
+const char * const turbo2_option_names_short[] = {" COMM", " J2P2", "  SIO", " NONE"};
+const char * const turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 2", "SIO Data Out", "None / Motor"};
 const char * const turbo3_option_names_long[] = {"Normal", "Inverted"};
 
 const option_list option_lists[] = {
@@ -1038,11 +1060,14 @@ restart_options:
 				break;
 			} else {
 				int old_hsio_option = current_options[hsio_option_index];
+				int old_clock_option = current_options[clock_option_index];
 				select_option(cursor_position);
 				if(current_options[hsio_option_index] != old_hsio_option) {
 					high_speed = -1;
 					uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[0] : hsio_opt_to_baud_pal[0]);
 				}
+				if(current_options[clock_option_index] != old_clock_option)
+					update_colors();
 				goto restart_options;
 			}
 		}
@@ -1165,6 +1190,8 @@ int main() {
 	init_locks();
 
 	check_and_load_config(b_pressed);
+
+	update_colors();
 
 	tud_mount_cb();
 

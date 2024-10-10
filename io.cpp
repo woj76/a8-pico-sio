@@ -19,7 +19,7 @@ const uint command_line_pin = 11;
 const uint proceed_pin = 21;
 const uint interrupt_pin = 22;
 const uint joy2_p1_pin = 26;
-const uint joy2_p3_pin = 27;
+const uint joy2_p2_pin = 27;
 const uint joy2_p4_pin = 28;
 
 // Conventional SIO, but also Turbo D & Turbo 6000
@@ -27,8 +27,8 @@ const uint32_t normal_motor_pin_mask = (1u << normal_motor_pin);
 const uint32_t normal_motor_value_on = (MOTOR_ON_STATE << normal_motor_pin);
 
 // Turbo 2000 KSO - Joy 2 port
-const uint32_t kso_motor_pin_mask = (1u << joy2_p3_pin);
-const uint32_t kso_motor_value_on = (0u << joy2_p3_pin);
+const uint32_t kso_motor_pin_mask = (1u << joy2_p2_pin);
+const uint32_t kso_motor_value_on = (0u << joy2_p2_pin);
 
 // Turbo 2001 / 2000F and sorts over SIO data
 const uint32_t comm_motor_pin_mask = (1u << command_line_pin) | (1u << normal_motor_pin);
@@ -140,7 +140,7 @@ void init_io() {
 	// How much "silence" can the PIO produce in one step:
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
-	gpio_init(joy2_p3_pin); gpio_set_dir(joy2_p3_pin, GPIO_IN); gpio_pull_up(joy2_p3_pin);
+	gpio_init(joy2_p2_pin); gpio_set_dir(joy2_p2_pin, GPIO_IN); gpio_pull_up(joy2_p2_pin);
 
 	gpio_init(normal_motor_pin); gpio_set_dir(normal_motor_pin, GPIO_IN);
 
