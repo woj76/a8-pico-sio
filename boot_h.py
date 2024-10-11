@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-f = open("a.o65", "rb")
+f = open("disk_boot.bin", "rb")
 d = f.read()
 f.close()
 
@@ -14,6 +14,20 @@ for c in d:
 	if i % 16 == 0:
 		s += "\n\t"
 s = s[:-3]
-s += "\n};\n"
+s += "\n};\n\nconst uint8_t boot_reloc_locs[] = {"
 
-print(s)
+f = open("disk_boot.txt", "rt")
+d = f.read().split("\n")
+f.close()
+
+cnt = 0;
+for x in d:
+	if x[:5] == "reloc":
+		s += "0x"+x[13:15]+", "
+		cnt += 1
+
+s = s[:-2]+f"}};\n\n#define boot_reloc_locs_size {cnt}\n\n"
+
+f = open("boot_loader.h","wt")
+f.write(s)
+f.close();

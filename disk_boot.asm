@@ -8,6 +8,7 @@ dbufhi	=	$305
 daux1	=	$30a
 daux2	=	$30b
 dskinv	=	$e453
+skctl	=	$d20f
 
 load_ptr =	$44
 load_end =	$46
@@ -52,6 +53,7 @@ load_2
 	lda #<(load_1-1) : pha
 	jmp (initad)
 load_run
+	lda #$03 : sta skctl
 	jmp (runad)
 load_error
 	sec
