@@ -63,7 +63,7 @@ In this case you simply plug the Pimoroni Display Pack 2.0 onto the Pico and con
 * I urge you not to be tempted to power the Pico through the VSYS pin from the Atari, even though it is possible (notes on power usage / requirements below), because the risk of forgetting the plugged in USB cable and powering your switched off Atari back from the SIO device is too high and dangerous.
 * Finally, you can hook up an external SD card breakout board (just make sure you use a compatible 3.3V one) through Pico GPIO pins 12-15 appropriately, but for that you need to first disconnect these pins from the Pimoroni display and route the disconnected display pins to Pico's GPIOs 0-3 instead. I leave the details to the curious, you can check the schematic of the carrier board below to see what is needed exactly. All in all, connecting everything to the Pico without using the carrier board creates a considerable maze of wires, the exact reason for which I built the carrier board in the first place, but it can function this way without problems and you can even attempt to drop this whole web into a case of some sort.
 
-<img src="./images/bare_connections.png" alt="Connections between the Pico board and Atari" width="600">
+<img src="./images/bare_connections.png" alt="Connections between the Pico board and Atari">
 
 ### Carrier Board Based Device and the Different Options
 
@@ -90,6 +90,8 @@ I assembled the board myself using a hot plate for the SMD parts, you can attemp
 * D1: BAT54J SOD-323F 30V 200mA
 * Q1: P-channel MOSFET AOSS21115C SOT-23 P-ch 20V 4.5A (The Raspberry Pico datasheet specifies the requirements for this MOSFET, I used this particular one that was available locally and matching these requirements. What the datasheet says in particular is "An example of a suitable P-MOSFET for most situations is Diodes DMG2305UX which has a maximum Vt (threshold voltage) of 0.9V and Ron of 100mΩ (at 2.5V Vgs)").
 * Male and female headers for the display and the Pico, respectively, and optionally the headers for the wires (these can be easily soldered on to the board directly).
+
+<img src="./images/board_connections.png" alt="Connections between the Pico board and Atari">
 
 ## Firmware
 
