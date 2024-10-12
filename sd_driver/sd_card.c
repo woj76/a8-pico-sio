@@ -1,3 +1,7 @@
+/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
+ * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+ */
+
 /* sd_card.c
 Copyright 2021 Carl John Kugler III
 
@@ -995,8 +999,8 @@ bool sd_init_driver() {
 
             if (pSD->use_card_detect) {
                 gpio_init(pSD->card_detect_gpio);
-		// This is done in hardware with a 47K resistor
-                //gpio_pull_up(pSD->card_detect_gpio);
+		// This is done in hardware with a 4K7 resistor
+                // gpio_pull_up(pSD->card_detect_gpio);
                 gpio_set_dir(pSD->card_detect_gpio, GPIO_IN);
             }
 	    /*
@@ -1146,21 +1150,18 @@ static bool sd_test_com(sd_card_t *pSD) {
     return success;
 }
 
-static spi_t spis[] = {  // One for each SPI.
+static spi_t spis[] = {
     {
         .hw_inst = spi1,  // SPI component
         .miso_gpio = 12, // GPIO number (not pin number)
         .mosi_gpio = 15,
         .sck_gpio = 14,
 	//.baud_rate = 32500000 // This one works too on my SD card, seems excessive though
-	// All the three rates below seem to work fine with ATX
-	// choose the slowest one for safety
+	// All the three rates below seem to work fine with the ATX emulation
+	// choose the slowest one for compatibility?
 	//.baud_rate = 25000000 // ~2000 us
 	//.baud_rate = 16000000 // ~3000 us
 	.baud_rate = 12500000 // ~3400 us
-//	.set_drive_strength = true,
-//	.mosi_gpio_drive_strength = 0,
-//	.sck_gpio_drive_strength = 0
     }
 };
 
@@ -1173,8 +1174,6 @@ static sd_card_t sd_cards[] = {  // One for each SD card
         .card_detect_gpio = 9,   // Card detect
         .card_detected_true = 1  // What the GPIO read returns when a card is
                                  // present. Use -1 if there is no card detect.
-//	.set_drive_strength = true,
-//	.ss_gpio_drive_strength = 0
     }
 };
 

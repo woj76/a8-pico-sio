@@ -1,8 +1,13 @@
-/**
-  (Quite) modified implementation from sdrive-max project
-  Original author of the ATX code dated 21/01/2018 is Daniel Noguerol
-  Check the sdrive-max project for details.
-*/
+/*
+ * (Rather) modified ATX implementation from the sdrive-max project.
+ * Original author of the ATX code dated 21/01/2018 is Daniel Noguerol
+ * Check the sdrive-max project for details:
+ *
+ * https://github.com/kbr-net/sdrive-max
+ *
+ * The original documentation is mostly removed due to major changes in the code
+ * (so that this one is not confused with the source one).
+ */
 
 #include <string.h>
 #include "pico/time.h"

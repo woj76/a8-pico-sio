@@ -1,3 +1,7 @@
+/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
+ * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+ */
+
 /* sd_card.h
 Copyright 2021 Carl John Kugler III
 

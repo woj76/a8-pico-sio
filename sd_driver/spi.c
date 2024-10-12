@@ -1,3 +1,7 @@
+/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
+ * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+ */
+
 /* spi.c
 Copyright 2021 Carl John Kugler III
 
@@ -121,7 +125,7 @@ bool my_spi_init(spi_t *spi_p) {
 	gpio_set_drive_strength(spi_p->sck_gpio, sd_gpio_drive_strength);
 
         // SD cards' DO MUST be pulled up.
-        // This is done in hardware with a 47K resistor
+        // This is done in hardware with a 4K7 resistor
         // gpio_pull_up(spi_p->miso_gpio);
 
         // Grab some unused dma channels

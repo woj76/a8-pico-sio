@@ -1,3 +1,5 @@
+/* See atx.cpp for credits and other info. */
+
 #pragma once
 
 #include "config.h"

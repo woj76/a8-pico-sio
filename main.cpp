@@ -1,4 +1,4 @@
-// Useful links:
+// Some useful links:
 // https://forums.raspberrypi.com/viewtopic.php?t=349257
 // https://github.com/TheMontezuma/SIO2BSD
 // https://forums.atariage.com/topic/290397-atari-sio-transmission-oscillogram/

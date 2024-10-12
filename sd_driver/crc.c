@@ -1,14 +1,18 @@
+/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
+ * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+ */
+
 /* crc.c
 Copyright 2021 Carl John Kugler III
 
-Licensed under the Apache License, Version 2.0 (the License); you may not use 
-this file except in compliance with the License. You may obtain a copy of the 
+Licensed under the Apache License, Version 2.0 (the License); you may not use
+this file except in compliance with the License. You may obtain a copy of the
 License at
 
-   http://www.apache.org/licenses/LICENSE-2.0 
-Unless required by applicable law or agreed to in writing, software distributed 
-under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR 
-CONDITIONS OF ANY KIND, either express or implied. See the License for the 
+   http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 */
 /* Derived from:
@@ -111,6 +115,6 @@ unsigned short crc16(const char* data, int length)
 void update_crc16(unsigned short *pCrc16, const char data[], size_t length) {
 	for (size_t i = 0; i < length; i++) {
 		*pCrc16 = (*pCrc16 << 8) ^ m_Crc16Table[((*pCrc16 >> 8) ^ data[i]) & 0x00FF];
-	}    
+	}
 }
 /* [] END OF FILE */

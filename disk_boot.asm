@@ -1,3 +1,7 @@
+; This is a modified version of tiny xdos from the Numen demo
+; found at https://github.com/pfusik/numen/blob/master/dos.asx
+; See the original repository for credits.
+
 SECTOR_SIZE = 128 ; SD/ED
 
 runad	=	$2e0
