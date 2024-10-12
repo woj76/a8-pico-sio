@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 
 if(NOT PICO_BOARD)
-    set(PICO_BOARD pico) # pico2 is effectively broken
+    set(PICO_BOARD pico)
 endif()
 
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)

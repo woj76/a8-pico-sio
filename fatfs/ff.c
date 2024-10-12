@@ -1,3 +1,9 @@
+/* Note that some code has been altered here w.r.t. the original FatFs
+ * code to accommodate some specific handling of file names with non-ASCII
+ * characters, in other words, this file got slightly "butchered" and is no
+ * longer the same as the original one.
+ */
+
 /*----------------------------------------------------------------------------/
 /  FatFs - Generic FAT Filesystem Module  R0.15 w/patch1                      /
 /-----------------------------------------------------------------------------/
