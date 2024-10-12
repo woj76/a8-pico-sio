@@ -6,7 +6,7 @@ An Atari 8-bit SIO device implementation for a [Raspberry Pi Pico (2)](https://w
 
 ## DISCLAIMER
 
-**First and foremost** -- connecting this device to your 8-bit Atari might be dangerous (especially when not done right) to your precious 8-bit retro equipment. You do all this at your own risk and I will not be held liable if you break or destroy anything. Also, I am not an electrical engineer, so I could have made some potentially disastrous assumptions or decisions in the project (I did try my best not to). Again: **USE AT YOUR OWN RISK!**
+**First and foremost** - connecting this device to your 8-bit Atari might be dangerous (especially when not done right) to your precious 8-bit retro equipment. You do all this at your own risk and I will not be held liable if you break or destroy anything. Also, I am not an electrical engineer, so I could have made some potentially disastrous assumptions or decisions in the project (I did try my best not to). Again: **USE AT YOUR OWN RISK!**
 
 In the following I also assume you have basic knowledge of how the Atari 8-bit operates and that you can find out on the Internet how to install the Pico firmware by copying the UF2 file to your Pico board. I also assume that if you want to compile the firmware source code yourself you know how to go about it using your OS of choice (below I only give hints on how to target the different Pico boards).
 
@@ -18,7 +18,7 @@ What is **supported**:
 
 * Loading of disk and tape image files from the Pico's internal FLASH (functioning as a USB drive when connected to a PC) or/and (at the same time) external SD card, with SD card hot-swapping.
 * Four emulated disk drives D1: to D4: with buttons to quickly rotate them in either direction and one C: device. 
-* Image files: ATR -- read and write (incl. formatting provided the size is a standard floppy one), ATX -- read and limited write (only ATX existing sectors), no formatting, CAS -- read of all CAS chunk types.
+* Image files: ATR - read and write (incl. formatting provided the size is a standard floppy one), ATX - read and limited write (only ATX existing sectors), no formatting, CAS - read of all CAS chunk types.
 * XEX file loading, read-only through a virtual disk image with relocatable (from $500 up to $A00) boot loader.
 * Creation of empty or pre-formatted ATR images of standard sizes up to 360KB. 
 * ATX mode selectable to be "accurate" Atari 1050 or 810 drive.
@@ -38,9 +38,9 @@ What is **not (yet in some cases) supported**:
 
 To connect the Pico SIO device to your Atari and make it functional, at the very least you need to have:
 
-* A standard Raspberry Pi Pico board or (layout) compatible one (for example, the Pimoroni Pico Lipo): https://www.raspberrypi.com/products/raspberry-pi-pico/. The new Pico 2 board can also work, but not really standalone (without the carrier board or additional resistor soldered on to the Pico 2 board) and has some quirks (but it also seems to be faster when working with the SD card?). I have not yet checked the compatibility of the Pico W boards, but if they take away some pins normally available on the plain one then chances are low (in full setup all the GPIO pins are used). Note also that the original Pico boards use Micro-USB connector, while some clones may use USB-C.
+* A standard Raspberry Pi Pico board or (layout) compatible one (for example, the Pimoroni Pico Lipo): https://www.raspberrypi.com/products/raspberry-pi-pico/. The new Pico 2 board can also work, but not really standalone (without the carrier board or additional resistor soldered on to the Pico 2 board) and has some quirks. I have not yet checked the compatibility of the Pico W boards, but if they take away some pins normally available on the plain one then chances are low (in full setup all the GPIO pins are used). Note also that the original Pico boards use Micro-USB connector, while some clones may use USB-C.
 * The Pimoroni Display Pack 2.0 for Pico: https://shop.pimoroni.com/products/pico-display-pack-2-0
-* (Alternative for mostly using the SIO including the SIO port based cassette turbo systems) An SIO plug or cable, you can get one at Lotharek: https://lotharek.pl. Note that the complete standard "small" 5 signal cable that is on offer there is not going to be sufficient for full operation of the device (for full operation the SIO plug needs essentially all connections). One option is to get the complete two-ended SIO cable and cut it in half and have enough to build two devices :). You can also get the SIO plugs or cables at https://retrolemon.co.uk/.
+* (Alternative for mostly using the SIO including the SIO port based cassette turbo systems) An SIO plug or cable, you can get one at Lotharek: https://lotharek.pl. Note that the complete standard "small" 5 signal cable that is on offer there is not going to be sufficient for full operation of the device (for full operation the SIO plug needs essentially all connections). One option is to get the complete two-ended SIO cable and cut it in half and have enough to build two devices :). You can also get the SIO plugs or cables at https://retrolemon.co.uk.
 * (Alternative for mostly using the Joystick Port 2 cassette turbo systems, like K.S.O. Turbo 2000 or Turbo D) DB9 joystick plug with wires. Not sure where to get one that is the most comfortable to use, I got some Sega Mega controller extension cables at a local web-shop and cut them open.
 
 Equipped with this you can get most of the SIO and/or turbo tape image functionality going with the Pico's internal FLASH storage for your Atari disk/tape image files (1 to 15MB storage depending on the Pico board used), but (a) it requires soldering the connection cables directly to the Pico, (b) you cannot have the SD card functionality (not without more soldering and bypassing some of the connections to the Pimoroni display board, if you do that, then you can connect an external SD card module / break-out board), (c) you should be extremely careful not to power the Pico from the USB and the Atari at the same time (**THIS WILL BE DANGEROUS TO YOUR ATARI!!!** - the best is not to connect the +5V from the Atari at all in the standalone version, and power the Pico from the USB port only).
@@ -53,7 +53,7 @@ The carrier board has been designed to integrate the basic device (Pico with the
 
 ### No Carrier Board Device
 
-In this case you simply plug the Pimoroni Display Pack 2.0 onto the Pico and connect (through soldering most probably) the necessary wires to the Atari ports, as on the picture, you can choose a selection of those depending on what you plan / need to use:
+In this case you simply plug the Pimoroni Display Pack 2.0 onto the Pico and connect (through soldering most probably) the necessary wires to the Atari ports, as on the picture, you can choose a selection of those depending on what you plan / need to use. Just remember not to confuse Pico footprint pin numbers with the GPIO numbers:
 
 * For the plain standard baud 600 SIO CAS file operation you need the SIO Input connected to the Pico UART1 TX line on GPIO pin 4, and the SIO motor line to the Pico's GPIO pin 10. If you are using Pico 2 you also need a pull-down resistor of 4.7kΩ (no more than ~9kΩ, check the Raspberry Pico 2 Erratum E9 for why this matters) between Pico GPIO 10 and ground. It is also worth considering connecting the motor line through a 1kΩ resistor to limit the current going into the Pico (though I had it working happily without it). (You also need to connect the ground wire between the Pico and the Atari, you always need that, only saying this because myself I forgot it at some point).
 * As shown on the picture, you can put a suitable Shottky diode on this one line to allow other SIO devices on the chain to be heard. (I used 1N5819 during experimentation, but I believe it can be "smaller" valued, on the carrier board I used BAT54J)
@@ -62,6 +62,8 @@ In this case you simply plug the Pimoroni Display Pack 2.0 onto the Pico and con
 * Otherwise you can have a selection of these connections according to your needs.
 * I urge you not to be tempted to power the Pico through the VSYS pin from the Atari, even though it is possible (notes on power usage / requirements below), because the risk of forgetting the plugged in USB cable and powering your switched off Atari back from the SIO device is too high and dangerous.
 * Finally, you can hook up an external SD card breakout board (just make sure you use a compatible 3.3V one) through Pico GPIO pins 12-15 appropriately, but for that you need to first disconnect these pins from the Pimoroni display and route the disconnected display pins to Pico's GPIOs 0-3 instead. I leave the details to the curious, you can check the schematic of the carrier board below to see what is needed exactly. All in all, connecting everything to the Pico without using the carrier board creates a considerable maze of wires, the exact reason for which I built the carrier board in the first place, but it can function this way without problems and you can even attempt to drop this whole web into a case of some sort.
+
+<img src="./images/bare_connections.png" alt="Connections between the Pico board and Atari" width="600">
 
 ### Carrier Board Based Device and the Different Options
 
@@ -108,9 +110,9 @@ _`board`_ being for example **`pico`** (the default), **`pico2`**, or **`pimoron
 
 ## (Sort of a) User Manual
 
-When everything is wired up properly and you connect the Pico to USB power you should see the display come up with the familiar Atari blue color and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive) or resetting the saved settings to defaults. (The settings are stored "secretly" in the Flash area, not in any file on the internal FLASH USB drive, so you can't modify the settings manually or remove the file, if you wonder.)
+When everything is wired up properly and you connect the Pico to USB power you should see the display come up and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive) or resetting the saved settings to defaults. (The settings are stored "secretly" in the Flash area, not in any file on the internal FLASH USB drive, so you can't modify the settings manually or remove the file, if you wonder.)
 
-When you do not choose the USB drive option, after a couple of seconds and slider passing through the screen, the device shall boot into the main screen. You should also see the color LED on the display blinking twice, in blue if there is no SD card detected (internal FLASH drive only), or in green if there is an SD card connected that is readable. 
+When you do not choose the USB drive option, after a couple of seconds and slider passing through the screen, the device shall boot into the main screen, now with the familiar Atari blue color. You should also see the color LED on the display blinking twice, in blue if there is no SD card detected (internal FLASH drive only), or in green if there is an SD card connected that is readable. 
 
 This is a good place to say that the SD card needs to be formatted with a single FAT32 partition. As far as the files on either of the media go, they all need valid file extensions (ATR, XEX, ATX, or CAS) and have corresponding internal contents. So, in particular, it is not possible to mount executable files with the COM or EXE extensions. (ROM and CAR files are not supported, obviously!)
 
@@ -143,7 +145,7 @@ However, the device will work with any combination of these as long as the Atari
 
 ### Mounting and un/re-mounting
 
-Each disk drive D1:--D4: slot and the tape C: slot are initially unmounted and empty. Choosing a file mounts the selected image (the red cross should vanish), unless the file is not recognized as a valid one of the given type. The B button (marked with "eject" pictogram) can be used to unmount the file, this, however, does not remove the file from the slot completely in case the user might want to mount it again later (also using the B button with the "inject" pictogram). Choosing a different file from the loader for a particular slot will remove the previously referenced file from that slot. 
+Each disk drive D1:-D4: slot and the tape C: slot are initially unmounted and empty. Choosing a file mounts the selected image (the red cross should vanish), unless the file is not recognized as a valid one of the given type. The B button (marked with "eject" pictogram) can be used to unmount the file, this, however, does not remove the file from the slot completely in case the user might want to mount it again later (also using the B button with the "inject" pictogram). Choosing a different file from the loader for a particular slot will remove the previously referenced file from that slot. 
 
 For the tape images in the C: slot it works in a similar way, only the pictograms are different (the "stop" and "play" ones), and re-mounting also effectively causes a tape rewind (because the file is freshly reloaded from the start).
 
