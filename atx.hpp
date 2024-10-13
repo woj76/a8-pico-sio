@@ -1,3 +1,14 @@
+/*
+ * This file is part of the a8-pico-sio project --
+ * An Atari 8-bit SIO drive and (turbo) tape emulator for
+ * Raspberry Pi Pico, see
+ *
+ *         https://github.com/woj76/a8-pico-sio
+ *
+ * For information on what / whose work it is based on, check below and the
+ * corresponding project repository.
+ */
+
 /* See atx.cpp for credits and other info. */
 
 #pragma once

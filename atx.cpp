@@ -1,4 +1,15 @@
 /*
+ * This file is part of the a8-pico-sio project --
+ * An Atari 8-bit SIO drive and (turbo) tape emulator for
+ * Raspberry Pi Pico, see
+ *
+ *         https://github.com/woj76/a8-pico-sio
+ *
+ * For information on what / whose work it is based on, check below and the
+ * corresponding project repository.
+ */
+
+/*
  * (Rather) modified ATX implementation from the sdrive-max project.
  * Original author of the ATX code dated 21/01/2018 is Daniel Noguerol
  * Check the sdrive-max project for details:

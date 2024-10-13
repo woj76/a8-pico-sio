@@ -1,3 +1,17 @@
+/*
+ * This file is part of the a8-pico-sio project --
+ * An Atari 8-bit SIO drive and (turbo) tape emulator for
+ * Raspberry Pi Pico, see
+ *
+ *         https://github.com/woj76/a8-pico-sio
+ *
+ * For information on what / whose work it is based on, check the corresponding
+ * source files and the README file. This file is licensed under GNU General
+ * Public License 3.0 or later.
+ *
+ * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
+ */
+
 #include "disk_counter.hpp"
 
 #ifdef PIO_DISK_COUNTER
@@ -50,7 +64,7 @@ void init_disk_counter() {
 	dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 0x8000000, true);
 	// dma_channel_configure(disk_dma_channel, &disk_dma_c, &disk_counter, &disk_pio->rxf[disk_sm], 1, true);
 
-	disk_pio->txf[disk_sm] = (au_full_rotation-1);
+	disk_pio->txf[disk_sm] = (au_full_rotation-1); // Start the first iteration of the counter
 }
 
 #endif

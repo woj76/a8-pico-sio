@@ -1,18 +1,34 @@
-// Some useful links:
-// https://forums.raspberrypi.com/viewtopic.php?t=349257
-// https://github.com/TheMontezuma/SIO2BSD
-// https://forums.atariage.com/topic/290397-atari-sio-transmission-oscillogram/
-// https://www.atarimax.com/jindroush.atari.org/asio.html
-// https://github.com/HiassofT/highspeed-sio/blob/master/README.txt
-// https://tnt23.livejournal.com/605184.html
-// http://ftp.pigwa.net/stuff/collections/nir_dary_cds/Tech%20Info/The%20SIO%20protocol%20description/sio.html
-// https://allpinouts.org/pinouts/connectors/serial/atari-8-bit-serial-input-output-sio/
+/*
+ * This file is part of the a8-pico-sio project --
+ * An Atari 8-bit SIO drive and (turbo) tape emulator for
+ * Raspberry Pi Pico, see
+ *
+ *         https://github.com/woj76/a8-pico-sio
+ *
+ * For information on what / whose work it is based on, check the corresponding
+ * source files and the README file. This file is licensed under GNU General
+ * Public License 3.0 or later.
+ *
+ * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
+ */
 
-// https://forums.atariage.com/topic/271215-why-the-k-on-boot/?do=findComment&comment=4209492
-// http://www.whizzosoftware.com/sio2arduino/vapi.html
-// https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
-// https://www.a8preservation.com/#/guides/atx
-// https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
+/*
+Some useful links:
+
+https://forums.raspberrypi.com/viewtopic.php?t=349257
+https://github.com/TheMontezuma/SIO2BSD
+https://forums.atariage.com/topic/290397-atari-sio-transmission-oscillogram/
+https://www.atarimax.com/jindroush.atari.org/asio.html
+https://github.com/HiassofT/highspeed-sio/blob/master/README.txt
+https://tnt23.livejournal.com/605184.html
+http://ftp.pigwa.net/stuff/collections/nir_dary_cds/Tech%20Info/The%20SIO%20protocol%20description/sio.html
+https://allpinouts.org/pinouts/connectors/serial/atari-8-bit-serial-input-output-sio/
+https://forums.atariage.com/topic/271215-why-the-k-on-boot/?do=findComment&comment=4209492
+http://www.whizzosoftware.com/sio2arduino/vapi.html
+https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+https://www.a8preservation.com/#/guides/atx
+https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findComment&comment=4112899
+*/
 
 #include "config.h"
 

@@ -1,6 +1,16 @@
-/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
- * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico
+/*
+ * This file is part of the a8-pico-sio project --
+ * An Atari 8-bit SIO drive and (turbo) tape emulator for
+ * Raspberry Pi Pico, see
+ *
+ *         https://github.com/woj76/a8-pico-sio
+ *
+ * For information on what / whose work it is based on, check below and the
+ * corresponding project repository.
  */
+
+/* This file or its parts come originally from the no-OS-FatFS-SD-SPI-RPi-Pico
+ * project, see https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico */
 
 /* spi.c
 Copyright 2021 Carl John Kugler III
