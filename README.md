@@ -95,12 +95,12 @@ I assembled the board myself using a hot plate for the SMD parts, you can attemp
 
 In the `firmware` directory there are 6 files available for the different usage cases and possible boards (the selection of these pre-compiled files is due to the set of boards I used for testing):
 
-* `TODO` for standalone Pico 1 board operation (1MB of internal storage)
-* `TODO` for Pico 1 on the carrier board (same storage)
-* `TODO` for standalone Pico 2 board operation (3MB of internal storage)
-* `TODO` for Pico 2 on the carrier board (same storage)
-* `TODO` for standalone [Pimoroni Pico Lipo 16MB](https://shop.pimoroni.com/products/pimoroni-pico-lipo) (15MB of internal storage)
-* `TODO` for Pimoroni Pico Lipo 16MB on the carrier board (same storage)
+* `a8_pico1_sio_standalone.uf2` for standalone Pico 1 board operation (1MB of internal storage)
+* `a8_pico1_sio_board.uf2` for Pico 1 on the carrier board (same storage)
+* `a8_pico2_sio_standalone.uf2` for standalone Pico 2 board operation (3MB of internal storage)
+* `a8_pico2_sio_board.uf2` for Pico 2 on the carrier board (same storage)
+* `a8_pimoroni16mb_sio_standalone.uf2` for standalone [Pimoroni Pico Lipo 16MB](https://shop.pimoroni.com/products/pimoroni-pico-lipo) (15MB of internal storage)
+* `a8_pimoroni16mb_sio_board.uf2` for Pimoroni Pico Lipo 16MB on the carrier board (same storage)
 
 If you wish to compile the code yourself, get the [Pico development kit](https://github.com/raspberrypi/pico-sdk) installed, the [Pimoroni development kit](https://github.com/pimoroni/pimoroni-pico) installed too (I found it important to follow the corresponding guides to the word with no "I know better" shortcuts ;)), edit the `config.h` file to suit your needs (documentation inside the file, not too much to choose from actually) and then call `cmake` in the `build` directory specifying the target Pico board with:
 
