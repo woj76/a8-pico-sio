@@ -29,20 +29,23 @@ buffer_ofs
 	.word buffer_ofs : reloc01 = *-1
 	.word $e477		;?!?!? Relevant when using CASINI only
 
-	lda #0 : sta buffer+SECTOR_SIZE-1 : reloc02 = *-1 : sta buffer_ofs : reloc03 = *-1
+	lda #0 : sta runad : sta runad+1 : sta buffer+SECTOR_SIZE-1 : reloc02 = *-1 : sta buffer_ofs : reloc03 = *-1
 	lda #$01 : sta buffer+SECTOR_SIZE-3 : reloc04 = *-1
 	lda #$71 : sta buffer+SECTOR_SIZE-2 : reloc05 = *-1
 
 load_1
 	jsr read : reloc06 = *-1 : bmi load_run : sta load_ptr
-	jsr read : reloc07 = *-1 : bmi load_error : sta load_ptr+1
+	jsr read : reloc07 = *-1 : bmi load_run : sta load_ptr+1
 	cmp #$ff : bcs load_1
-	jsr read : reloc08 = *-1 : bmi load_error : sta load_end
-	jsr read : reloc09 = *-1 : bmi load_error : sta load_end+1
+	jsr read : reloc08 = *-1 : bmi load_run : sta load_end
+	jsr read : reloc09 = *-1 : bmi load_run : sta load_end+1
+	lda runad : ora runad+1 : bne load_1_1
+	lda load_ptr : sta runad : lda load_ptr+1 : sta runad+1
+load_1_1
 	lda #<read_ret : sta initad
 	lda #>read_ret : reloc10 = *-1 : sta initad+1
 load_2
-	jsr read : reloc11 = *-1 : bmi load_error
+	jsr read : reloc11 = *-1 : bmi load_run
 	ldy #$00
 	sta (load_ptr),y
 	ldy load_ptr
@@ -59,9 +62,6 @@ load_2
 load_run
 	lda #$03 : sta skctl
 	jmp (runad)
-load_error
-	sec
-	rts
 
 sio_next
 	lda buffer+SECTOR_SIZE-3 : reloc13 = *-1 : ldy buffer+SECTOR_SIZE-2 : reloc14 = *-1
