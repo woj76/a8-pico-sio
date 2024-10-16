@@ -1330,7 +1330,7 @@ int main() {
 		update_main_menu_buttons();
 
 /*
-		sprintf(txt_buf, "%d", turbo_data_pin);
+		sprintf(txt_buf, "%d %d", rot_pos, rot_pos2);
 		text_location.x = 0;
 		text_location.y = 0;
 		Rect rt(text_location.x, text_location.y, 20*font_scale*8, font_scale*16);

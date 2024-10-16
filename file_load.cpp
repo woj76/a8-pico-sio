@@ -48,9 +48,9 @@ static bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
 	switch(ft) {
 		case file_type::casette:
-			return strcasecmp(&filename[i], "CAS") == 0;
+			return !strcasecmp(&filename[i], "CAS");
 		case file_type::disk:
-			return strcasecmp(&filename[i], "ATR") == 0 || strcasecmp(&filename[i], "ATX") == 0 || strcasecmp(&filename[i], "XEX") == 0  || strcasecmp(&filename[i], "COM") == 0;
+			return !strcasecmp(&filename[i], "ATR") || !strcasecmp(&filename[i], "ATX") || !strcasecmp(&filename[i], "XEX") || !strcasecmp(&filename[i], "COM") || !strcasecmp(&filename[i], "EXE");
 		default:
 			return false;
 	}

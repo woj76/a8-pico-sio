@@ -10,15 +10,15 @@ In the following I also assume that you have basic knowledge of how the Atari 8-
 
 ## What is it?
 
-This project is an Atari SIO drive emulator implemented on a Raspberry Pi Pico, similar in functionality to SDrive family of devices or SIO2SD. The first main motivation was to support loading of all kinds of turbo CAS tape images (not only the plain Atari SIO tape images, but all kinds that originally required the tape recorder hardware expansions like K.S.O. Turbo 2000, Turbo Blizzard, etc.) on a real Atari. (So far, the only actual device capable of that seems to be the AVG/SUBCart, but only through the SIO port's data lines, or the so far unpublished Bluetooth audio devices by Zaxxon, but these are mostly for WAV files.) Another driving force was to get acquainted with the Pico platform and the SIO protocol, hence a proper Dn: "classic" drive emulation was added too, with write and ATX support. Finally, I opted for a no driver program on the Atari side approach, but a (color) display based UI on the Pico side, and then also for a non-touch screen solution (I have been off-put by constant screen calibration problems on my SDrive-MAX). 
+This project is an Atari SIO drive emulator implemented on a Raspberry Pi Pico, similar in functionality to SDrive family of devices or SIO2SD. The first main motivation was to support loading of all kinds of turbo CAS tape images (not only the plain Atari SIO tape images, but all kinds that originally required the tape recorder hardware expansions like K.S.O. Turbo 2000, Turbo Blizzard, etc.) on a real Atari. (So far, the only actual device capable of that seems to be the AVG/SUBCart, but only through the SIO port's data lines, or the so far unpublished Bluetooth audio devices by Zaxxon, but these are mostly for WAV files.) Another driving force was to get acquainted with the Pico platform and the SIO protocol, hence a proper Dn: "classic" drive emulation was added too, with write and ATX support. Finally, I opted for a no driver program on the Atari side approach, but a (color) display based UI on the Pico side, and then also for a non-touch screen solution (I have been off-put by constant screen calibration problems on my SDrive-MAX).
 
 What is **supported**:
 
 * Loading of disk and tape image files from the Pico's internal FLASH (functioning as a USB drive when connected to a PC) or/and (at the same time) external SD card, with SD card hot-swapping.
-* Four emulated disk drives D1: to D4: with buttons to quickly rotate them in either direction and one C: device. 
+* Four emulated disk drives D1: to D4: with buttons to quickly rotate them in either direction and one C: device.
 * Image files: ATR - read and write (incl. formatting provided the size is a standard floppy one), ATX - read and limited write (only ATX existing sectors), no formatting, CAS - read of all CAS chunk types.
 * XEX file loading, read-only through a virtual disk image with relocatable (from `$500` up to `$A00`) boot loader.
-* Creation of empty or pre-formatted ATR images of standard sizes up to 360KB. 
+* Creation of empty or pre-formatted ATR images of standard sizes up to 360KB.
 * ATX mode selectable to be an "accurate" Atari 1050 or Atari 810 drive.
 * Tape turbo systems normally connected to the Atari through the different SIO lines (including the interrupt and proceed lines, like Turbo 6000 or Rambit) and the Joystick 2 port lines (K.S.O. Turbo 2000 or Turbo D). All turbo systems for images expressed as CAS files should be supported, including non-standard bit-rate ones, hybrid ones (normal SIO mode loader + turbo main payload), and multi-stage ones, but not all have been tested (well, all that have been thrown at me were). Similarly to Altirra, an option to invert the PWM signal for the "wrongly" produced turbo CAS files is included.
 * Separate baud rates for PAL and NTSC host machines to match the serial speed as close as possible to the Pokey speed (to limit possible transmission errors).
@@ -65,7 +65,7 @@ In this case you simply plug the Pimoroni Display Pack 2.0 onto the Pico and con
 
 ### Carrier Board Based Device and the Different Options
 
-The carrier board relives you of the wires, disconnecting the 4 wires to enable the SD card reader, integrates the SD card slot on the board, provides the pull-down resistor on the SIO motor line for the Pico 2, integrates the UART TX Shottky diode, and finally provides the facility to power the device from Atari through a MOSFET that disconnects the Atari power upon connecting the USB cable. 
+The carrier board relives you of the wires, disconnecting the 4 wires to enable the SD card reader, integrates the SD card slot on the board, provides the pull-down resistor on the SIO motor line for the Pico 2, integrates the UART TX Shottky diode, and finally provides the facility to power the device from Atari through a MOSFET that disconnects the Atari power upon connecting the USB cable.
 
 **Note on powering the Pico SIO device from the Atari:** From the figures I have seen (in the SDrive-MAX documentation, not sure what the actual source of this information is), the +5V/Ready line on the SIO port is rated at max 50mA, I measured the complete Pico SIO device to use upwards of **70mA**. It seemed to be fine with no other devices on the SIO chain, but I know I had problems powering the SDrive-MAX that uses ~150mA with my Ataris, especially the 800XL. So, in case of any problems, just use the USB port on the Pico to power it.
 
@@ -112,11 +112,11 @@ _`board`_ being for example **`pico`** (the default), **`pico2`**, or **`pimoron
 
 When everything is wired up properly and you connect the Pico to USB power you should see the display come up and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive) or resetting the saved settings to defaults. The settings are stored "secretly" in the FLASH area, not in any file on the internal FLASH USB drive, so you cannot modify the settings manually or remove the file, if you wonder.
 
-When you do not choose the USB drive option, after a couple of seconds and a slider passing through the screen, the device shall boot into the main screen, now with the familiar Atari blue color. You should also see the color LED on the display blinking twice, in blue if there is no SD card detected (internal FLASH drive only), or in green if there is a recognizable SD card connected. 
+When you do not choose the USB drive option, after a couple of seconds and a slider passing through the screen, the device shall boot into the main screen, now with the familiar Atari blue color. You should also see the color LED on the display blinking twice, in blue if there is no SD card detected (internal FLASH drive only), or in green if there is a recognizable SD card connected.
 
-This is a good place to say that the SD card needs to be formatted with a single FAT32 partition. As far as the files on either of the media go, they all need valid file extensions (ATR, XEX, ATX, or CAS) and have corresponding internal contents. So, in particular, it is not possible to mount executable files with the COM or EXE extensions. (ROM and CAR files are not supported, obviously!)
+This is a good place to say that the SD card needs to be formatted with a single FAT32 partition. As far as the files on either of the media go, they all need valid file extensions (ATR, ATX, CAS, XEX, COM, or EXE) and have corresponding internal contents. So, in particular, it is not possible to mount executable files with extensions other than XEX, COM, or EXE. (ROM and CAR files are not supported, obviously!)
 
-Once on the main screen you can proceed to configure the options or mount the files, the rotation commands should be more or less obvious and so should be the `About...` entry. 
+Once on the main screen you can proceed to configure the options or mount the files, the rotation commands should be more or less obvious and so should be the `About...` entry.
 
 ### Options
 
@@ -145,21 +145,21 @@ However, the device will work with any combination of these as long as the Atari
 
 ### Mounting and un/re-mounting
 
-Each of the disk drive D1:-D4: slots and the tape C: slot are initially unmounted and empty. Choosing a file mounts the selected image (the red cross should vanish), unless the file is not recognized as a valid one of the given type. The B button (marked with "eject" pictogram) can be used to unmount the file, this, however, does not remove the file from the slot completely in case the user might want to mount it again later (also using the B button with the "inject" pictogram). Choosing a different file from the loader for a particular slot will remove the previously referenced file from that slot. 
+Each of the disk drive D1:-D4: slots and the tape C: slot are initially unmounted and empty. Choosing a file mounts the selected image (the red cross should vanish), unless the file is not recognized as a valid one of the given type. The B button (marked with "eject" pictogram) can be used to unmount the file, this, however, does not remove the file from the slot completely in case the user might want to mount it again later (also using the B button with the "inject" pictogram). Choosing a different file from the loader for a particular slot will remove the previously referenced file from that slot.
 
 For the tape images in the C: slot it works in a similar way, only the pictograms are different (the "stop" and "play" ones), and re-mounting also effectively causes a tape rewind (because the file is freshly reloaded from the start).
 
-You can umount the slots while they are being read by the Atari, in which case the corresponding image transfer will of course fail. When the SD card is removed and there are any mounts referring to the files on the SD card, they will be fully emptied. 
+You can umount the slots while they are being read by the Atari, in which case the corresponding image transfer will of course fail. When the SD card is removed and there are any mounts referring to the files on the SD card, they will be fully emptied.
 
 A single disk image file can be mounted in more than one disk slot (though this is "conceptually" wrong), however, only the first mount is allowed to be in read-write mode, the other/later mounts of the same file will put the corresponding drive into read-only mode.
 
-Rotation commands unmount all drive slots, move them up or down correspondingly, and remount the slots. This also means that the read-write status of multiply mounted single image is rotated accordingly. 
+Rotation commands unmount all drive slots, move them up or down correspondingly, and remount the slots. This also means that the read-write status of multiply mounted single image is rotated accordingly.
 
 Finally, upon file selection for mounting a disk drive you can choose to create a new disk image in the current directory, either empty or pre-formatted for the most common Atari DOS-es (2.0/2.5, MyDOS, and SpartaDOSX), through a series of option picks.
 
 ### LED and Screen Indicators
 
-When operating / interacting with the Atari, the color LED next to the display flashes to indicate certain thing. Green flashes indicate a read transfer from the current device, red indicates a write transfer to the current device/disk, and in addition to that the blue color can be flashing, which indicates high speed SIO operation (for disk drives), or a turbo/PWM operation (for the tape device). The current (or most recent) device is indicated with a green circle on the display on the left of the device letter, the red cross indicates that a drive has been unmounted by the user, the mounted file stays attached to the drive to enable quick remount (see above), unless the hosting media (SD card) is removed, in which case all the entries referring to the removed card are emptied. 
+When operating / interacting with the Atari, the color LED next to the display flashes to indicate certain thing. Green flashes indicate a read transfer from the current device, red indicates a write transfer to the current device/disk, and in addition to that the blue color can be flashing, which indicates high speed SIO operation (for disk drives), or a turbo/PWM operation (for the tape device). The current (or most recent) device is indicated with a green circle on the display on the left of the device letter, the red cross indicates that a drive has been unmounted by the user, the mounted file stays attached to the drive to enable quick remount (see above), unless the hosting media (SD card) is removed, in which case all the entries referring to the removed card are emptied.
 
 The color LED also flashes on SD card removal (red blinks) and insertion (green blinks when successful).
 

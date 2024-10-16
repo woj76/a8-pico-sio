@@ -290,7 +290,7 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 						}
 						// check if it's the next sector that the head would encounter angularly...
 						int tt = sectorHeader->timev - headPosition.angle;
-						if (!tgtSectorOffset || (tt > 0 && pTT < 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt < 0 && pTT < 0 && tt < pTT)) {
+						if (!tgtSectorOffset || (tt > 0 && pTT <= 0) || (tt > 0 && pTT > 0 && tt < pTT) || (tt <= 0 && pTT <= 0 && tt < pTT)) {
 							pTT = tt;
 							*status = sectorHeader->status;
 							writeStatusOffset = currentFileOffset + 1;
@@ -359,12 +359,13 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 		} else {
 			// No matching sector found at all or the track does not match the disk density
 			sleep_until(delayed_by_ms(headPosition.stamp, is1050 ? ms_2fake_rot_1050 : ms_3fake_rot_810));
-			if(is1050 || retries == 2)
+			if(is1050 || retries == 2) {
 				// Repositioning the head for the target track
 				if(!is1050)
 					sleep_us((43+tgtTrackNumber)*us_track_step_810+us_head_settle_810);
 				else if(tgtTrackNumber)
 					sleep_us((2*tgtTrackNumber+1)*us_track_step_1050+us_head_settle_1050);
+			}
 		}
 
 		getCurrentHeadPosition(&headPosition);
