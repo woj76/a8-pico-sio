@@ -20,6 +20,7 @@
 
 char curr_path[MAX_PATH_LEN];
 size_t num_files, num_files_page;
+DIR dir = {0};
 
 char temp_array[MAX_PATH_LEN];
 volatile int16_t create_new_file = 0;
@@ -75,7 +76,6 @@ uint16_t next_page_references[5464]; // This is 65536 / 12 (max_files_per_page) 
 */
 int32_t read_directory(int32_t page_index, int page_size) {
 	FILINFO fno;
-	DIR dir;
 	int32_t ret = -1;
 
 	if(!curr_path[0]) {
@@ -94,7 +94,8 @@ int32_t read_directory(int32_t page_index, int page_size) {
 
 	mutex_enter_blocking(&fs_lock);
 	//f (f_mount(&fatfs[0], curr_path, 1) == FR_OK) {
-		if (f_opendir(&dir, curr_path) == FR_OK) {
+		if (f_rewinddir(&dir) == FR_OK) {
+		//if (f_opendir(&dir, curr_path) == FR_OK) {
 			ret = 0;
 			uint16_t dir_index = -1;
 			int32_t look_for_index = page_index >= 0 ? next_page_references[page_index] : -1;
@@ -155,7 +156,7 @@ int32_t read_directory(int32_t page_index, int page_size) {
 				}
 				next_page_references[page_index+1] = file_entries[page_size+1].dir_index;
 			}
-			f_closedir(&dir);
+			// f_closedir(&dir);
 		}
 		//f_mount(0, curr_path, 1);
 	//}

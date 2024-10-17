@@ -151,7 +151,7 @@ For the tape images in the C: slot it works in a similar way, only the pictogram
 
 You can umount the slots while they are being read by the Atari, in which case the corresponding image transfer will of course fail. When the SD card is removed and there are any mounts referring to the files on the SD card, they will be fully emptied.
 
-A single disk image file can be mounted in more than one disk slot (though this is "conceptually" wrong), however, only the first mount is allowed to be in read-write mode, the other/later mounts of the same file will put the corresponding drive into read-only mode.
+A single disk image file can be mounted in only one disk slot, mounting it again in a different slot will fail (silently).
 
 Rotation commands unmount all drive slots, move them up or down correspondingly, and remount the slots. This also means that the read-write status of multiply mounted single image is rotated accordingly.
 

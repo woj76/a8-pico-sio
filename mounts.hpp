@@ -25,6 +25,7 @@ typedef struct {
 	char *mount_path;
 	bool mounted;
 	FSIZE_t status;
+	FIL fil;
 } mounts_type;
 
 typedef struct __attribute__((__packed__)) {
@@ -108,7 +109,7 @@ void mount_file(char *f, int drive_number, char *lfn);
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset=0, FSIZE_t brpt=1);
 
-FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset);
+FSIZE_t cas_read_forward(FSIZE_t offset);
 
 extern volatile uint8_t sd_card_present;
 extern const char * const volume_names[];

@@ -19,5 +19,6 @@
 #include <stdint.h>
 
 extern volatile int8_t high_speed;
+extern volatile bool fs_error_or_change;
 
 void main_sio_loop();

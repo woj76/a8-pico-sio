@@ -710,19 +710,32 @@ void get_file(int file_entry_index) {
 		// large directories).
 		loading_pg.init();
 		add_repeating_timer_ms(1000/60, repeating_timer_directory, NULL, &loading_pg_timer);
-		int32_t r = read_directory(-1, 0);
-		if(r < 0 && curr_path[0]) {
-			//if(sd_card_present)
+		int32_t r = 0;
+		// f_closedir(&dir);
+		if(curr_path[0]) {
+			mutex_enter_blocking(&fs_lock);
+			if(f_opendir(&dir, curr_path) != FR_OK)
+				r = -1;
+			mutex_exit(&fs_lock);
+		}
+		if(r >= 0) {
+			r = read_directory(-1, 0);
+			if(r < 0 && curr_path[0]) {
+				f_closedir(&dir);
+				//if(sd_card_present)
 				curr_path[0] = 0;
 				cursor_position = 0;
-			//else
-			//	strcpy(curr_path, volume_names[0]);
-			last_file_name[0] = 0;
-			r = read_directory(-1, 0);
+				//else
+				//	strcpy(curr_path, volume_names[0]);
+				last_file_name[0] = 0;
+				r = read_directory(-1, 0);
+			}
 		}
 		cancel_repeating_timer(&loading_pg_timer);
 		graphics.set_pen(BG); graphics.clear();
 		if(r < 0) {
+			// I really do not see how could this situation occur having the
+			// internal FLASH drive always availalbe, but just to be on the safe side...
 			text_location.x = str_x(str_no_media.size());
 			text_location.y = 7*8*font_scale;
 			print_text(str_no_media, str_no_media.size());
@@ -782,6 +795,8 @@ void get_file(int file_entry_index) {
 			if(sd_card_present != last_sd_card_file) {
 				last_sd_card_file = sd_card_present;
 				if((!sd_card_present && curr_path[0] == '1') || !curr_path[0]) {
+					if(curr_path[0])
+						f_closedir(&dir);
 					delete scroll_ptr; scroll_ptr = nullptr;
 					page_index = 0;
 					cursor_prev = -1;
@@ -836,6 +851,7 @@ void get_file(int file_entry_index) {
 					st7789.update(&graphics);
 				}
 			}else if(num_pages && button_a.read()) {
+				f_closedir(&dir);
 				int fi = cursor_position - (page_index ? 0 : shift_index);
 				int i = strlen(curr_path);
 				delete scroll_ptr; scroll_ptr = nullptr;
@@ -925,6 +941,7 @@ void get_file(int file_entry_index) {
 					}
 				}
 			} else if(button_b.read()) {
+				f_closedir(&dir);
 				int fi = cursor_position - (page_index ? 0 : shift_index);
 				if(fi >= 0)
 					strcpy(last_file_name, file_entries[fi].short_name);
@@ -1244,10 +1261,9 @@ int main() {
 	st7789.update(&graphics);
 	FSIZE_t last_cas_offset = -1;
 
-	uint8_t last_sd_card_menu = sd_card_present;
 	while(true) {
-		if(last_sd_card_menu != sd_card_present) {
-			last_sd_card_menu = sd_card_present;
+		if(fs_error_or_change) {
+			fs_error_or_change = false;
 			cursor_prev = -1;
 			update_main_menu();
 		}
@@ -1272,9 +1288,13 @@ int main() {
 					memcpy(temp_array, &mounts[si].str[3], 13);
 					memcpy(&temp_array[16], (const void *)mounts[si].mount_path, 256);
 					bool t = mounts[si].mounted;
+					if(t)
+						f_close(&mounts[si].fil);
 					for(int i=si; i != li; i += di) {
 						memcpy(&mounts[i].str[3], &mounts[i+di].str[3], 13);
 						memcpy((void *)mounts[i].mount_path, (void *)mounts[i+di].mount_path, 256);
+						if(mounts[i+di].mounted)
+							f_close(&mounts[i+di].fil);
 						mounts[i].mounted = mounts[i+di].mounted;
 						mounts[i].status = 0;
 					}
@@ -1307,6 +1327,7 @@ int main() {
 			if(d != -1) {
 				mutex_enter_blocking(&mount_lock);
 				if(mounts[d].mounted) {
+					f_close(&mounts[d].fil);
 					mounts[d].status = 0;
 					mounts[d].mounted = false;
 					blue_blinks = 0;

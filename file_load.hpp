@@ -17,12 +17,14 @@
 #include <ctype.h>
 #include <stdint.h>
 #include "config.h"
+#include "ff.h"
 
 #define MAX_PATH_LEN 512
 
 extern char curr_path[];
 extern size_t num_files;
 extern size_t num_files_page;
+extern DIR dir;
 
 extern char temp_array[];
 extern volatile int16_t create_new_file;

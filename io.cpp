@@ -143,14 +143,8 @@ void pio_enqueue(uint8_t b, uint32_t d) {
 }
 
 void init_io() {
-	// Depending on the Pico used, one of two options works better (no idea why / how...)
-#if defined(PIMORONI_PICOLIPO_16MB) || defined(PIMORONI_PICOLIPO_4MB)
-	// Pimorioni Lipo Picos like this one more
-	timing_base_clock = clock_get_hz(clk_sys);
-#else
-	// Genuine Pico(2)s like this one better
+	// timing_base_clock = clock_get_hz(clk_sys);
 	timing_base_clock = 1000000;
-#endif
 	// How much "silence" can the PIO produce in one step:
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 

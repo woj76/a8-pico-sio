@@ -74,6 +74,7 @@ void init_locks() {
 
 void mount_file(char *f, int drive_number, char *lfn) {
 	int j;
+/*
 	bool read_only = false;
 	if(drive_number) {
 		// Prevent the same file to mounted in two different drive slots
@@ -87,9 +88,23 @@ void mount_file(char *f, int drive_number, char *lfn) {
 			}
 		}
 	}
-	mutex_enter_blocking(&mount_lock);
 	if(read_only)
 		disk_headers[drive_number-1].atr_header.flags |= 0x01;
+*/
+	mutex_enter_blocking(&mount_lock);
+	if(mounts[drive_number].mounted)
+		f_close(&mounts[drive_number].fil);
+	if(drive_number) {
+		for(j=1; j<=4; j++) {
+			if(j == drive_number)
+				continue;
+			if(!strcmp(mounts[j].mount_path, curr_path) && !mounts[j].mounted){
+				mounts[j].mount_path[0] = 0;
+				strcpy(&mounts[j].str[3],"  <EMPTY>   ");
+				break;
+			}
+		}
+	}
 	mounts[drive_number].mounted = true;
 	mounts[drive_number].status = 0;
 	strcpy((char *)mounts[drive_number].mount_path, curr_path);
@@ -114,7 +129,7 @@ void mount_file(char *f, int drive_number, char *lfn) {
 
 
 FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_transfer, bool op_write, size_t t_offset, FSIZE_t brpt) {
-	FIL fil;
+	FIL* fil = &mounts[drive_number].fil;
 	FRESULT f_op_stat;
 	uint bytes_transferred;
 	uint8_t *data = &sector_buffer[t_offset];
@@ -123,9 +138,9 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 	do {
 		//if((f_op_stat = f_mount(&fatfs[0], (const char *)mounts[drive_number].mount_path, 1)) != FR_OK)
 		//	break;
-		if((f_op_stat = f_open(&fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
-			break;
-		if((f_op_stat = f_lseek(&fil, offset)) != FR_OK)
+//		if((f_op_stat = f_open(fil, (const char *)mounts[drive_number].mount_path, op_write ? FA_WRITE : FA_READ)) != FR_OK)
+//			break;
+		if((f_op_stat = f_lseek(fil, offset)) != FR_OK)
 			break;
 		uint vol_num = mounts[drive_number].mount_path[0] - '0';
 		if(op_write) {
@@ -135,26 +150,27 @@ FRESULT mounted_file_transfer(int drive_number, FSIZE_t offset, FSIZE_t to_trans
 				multicore_lockout_start_blocking();
 			}
 			for(uint i=0; i<brpt; i++)
-				f_op_stat = f_write(&fil, data, to_transfer, &bytes_transferred);
-			f_op_stat = f_sync(&fil);
+				f_op_stat = f_write(fil, data, to_transfer, &bytes_transferred);
+			f_op_stat = f_sync(fil);
 			if(!vol_num){
 				multicore_lockout_end_blocking();
 				restore_interrupts(ints);
 			}
 		} else
-			f_op_stat = f_read(&fil, data, to_transfer, &bytes_transferred);
+			f_op_stat = f_read(fil, data, to_transfer, &bytes_transferred);
 		if(f_op_stat != FR_OK)
 			break;
 		if(bytes_transferred != to_transfer)
 			f_op_stat = FR_INT_ERR;
 	}while(false);
-	f_close(&fil);
+//	f_close(fil);
 	//f_mount(0, (const char *)mounts[drive_number].mount_path, 1);
 	mutex_exit(&fs_lock);
 	return f_op_stat;
 }
 
-FSIZE_t cas_read_forward(FIL *fil, FSIZE_t offset) {
+FSIZE_t cas_read_forward(FSIZE_t offset) {
+	FIL* fil = &mounts[0].fil;
 	uint bytes_read;
 	if(f_lseek(fil, offset) != FR_OK) {
 		offset = 0;

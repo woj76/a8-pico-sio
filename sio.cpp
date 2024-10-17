@@ -47,6 +47,7 @@ const uint8_t percom_table[] = {
 const int8_t boot_reloc_delta[] = {-2, -1, 0, 1, 2, 3};
 
 volatile int8_t high_speed = -1;
+volatile bool fs_error_or_change = false;
 
 typedef struct __attribute__((__packed__)) {
 	uint8_t device_id;
@@ -127,7 +128,7 @@ static bool try_get_sio_command() {
 	}
 
 	if(r) {
-		absolute_time_t t = make_timeout_time_us(1000); // According to Avery's manual 950us
+		absolute_time_t t = make_timeout_time_us(1250); // According to Avery's manual 950us
 		while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
 			tight_loop_contents();
 		if(!gpio_get(command_line_pin))
@@ -137,7 +138,8 @@ static bool try_get_sio_command() {
 	}else{
 		if(current_options[hsio_option_index] && !freshly_changed && high_speed >= 0) {
 			high_speed ^= 1;
-			freshly_changed = 2 - high_speed;
+			// freshly_changed = 2 - high_speed;
+			freshly_changed = 2;
 			uint8_t s = high_speed ? current_options[hsio_option_index] : 0;
 			uart_set_baudrate(uart1, current_options[clock_option_index] ? hsio_opt_to_baud_ntsc[s] : hsio_opt_to_baud_pal[s]);
 		}else if(freshly_changed)
@@ -183,7 +185,7 @@ static uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 }
 
 void main_sio_loop() {
-	FIL fil;
+	// FIL fil;
 	FILINFO fil_info;
 	FSIZE_t offset, to_read;
 	FRESULT f_op_stat;
@@ -216,12 +218,14 @@ void main_sio_loop() {
 			mutex_enter_blocking(&mount_lock);
 			for(i=0; i<5; i++) {
 				if(last_access_error[i] || (cd_temp && mounts[i].mount_path[0] == '1')) {
+					f_close(&mounts[i].fil);
 					mounts[i].status = 0;
 					mounts[i].mounted = false;
 					mounts[i].mount_path[0] = 0;
 					strcpy(&mounts[i].str[i ? 3 : 2],"  <EMPTY>   ");
 					//red_blinks = 0;
 					//green_blinks = 0;
+					fs_error_or_change = true;
 					blue_blinks = 0;
 					update_rgb_led(false);
 				}
@@ -237,33 +241,33 @@ void main_sio_loop() {
 				continue;
 			}
 			mutex_enter_blocking(&fs_lock);
-			if(/*f_mount(&fatfs[0], (const char *)mounts[i].mount_path, 1) == FR_OK && */ f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
+			if(/*f_mount(&fatfs[0], (const char *)mounts[i].mount_path, 1) == FR_OK && */ f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&mounts[i].fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
 					reinit_turbo_pio();
 					cas_sample_duration = timing_base_clock/600;
-					cas_size = f_size(&fil);
-					if(f_read(&fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
+					cas_size = f_size(&mounts[0].fil);
+					if(f_read(&mounts[i].fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
-						mounts[i].status = cas_read_forward(&fil, cas_header.chunk_length + sizeof(cas_header_type));
+						mounts[i].status = cas_read_forward(cas_header.chunk_length + sizeof(cas_header_type));
 					if(!mounts[i].status)
 						set_last_access_error(i);
 					else if(last_drive == 0)
 							last_drive = -1;
 				} else {
 					uint8_t disk_type = 0;
-					if(f_read(&fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
+					if(f_read(&mounts[i].fil, sector_buffer, 4, &bytes_read) == FR_OK && bytes_read == 4) {
 						if(*(uint16_t *)sector_buffer == 0x0296) // ATR magic
 							disk_type = disk_type_atr;
 						else if(*(uint16_t *)sector_buffer == 0xFFFF)
 							disk_type = disk_type_xex;
 						else if(*(uint32_t *)sector_buffer == 0x58385441) // AT8X
 							disk_type = disk_type_atx;
-						f_lseek(&fil, 0);
+						f_lseek(&mounts[i].fil, 0);
 					}
 					switch(disk_type) {
 						case disk_type_atr:
-							if(f_read(&fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
+							if(f_read(&mounts[i].fil, &disk_headers[i-1].atr_header, sizeof(atr_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(atr_header_type)) {
 								mounts[i].status = (disk_headers[i-1].atr_header.pars | ((disk_headers[i-1].atr_header.pars_high << 16) & 0xFF0000)) << 4;
 								disk_headers[i-1].atr_header.temp2 = 0xFF;
 								if(!current_options[mount_option_index] || (fil_info.fattrib & AM_RDO))
@@ -274,7 +278,7 @@ void main_sio_loop() {
 							break;
 						case disk_type_xex:
 							// Sectors occupied by the file itself
-							offset = f_size(&fil);
+							offset = f_size(&mounts[i].fil);
 							disk_headers[i-1].atr_header.pars = (offset+124)/125;
 							disk_headers[i-1].atr_header.pars_high = offset % 125;
 							if(!disk_headers[i-1].atr_header.pars_high)
@@ -288,7 +292,7 @@ void main_sio_loop() {
 							disk_headers[i-1].atr_header.temp3 = 0x80;
 							break;
 						case disk_type_atx:
-							if(loadAtxFile(&fil, i-1)) {
+							if(loadAtxFile(&mounts[i].fil, i-1)) {
 								mounts[i].status = 40*atx_track_size[i-1]*disk_headers[i-1].atr_header.sec_size-(disk_headers[i-1].atr_header.sec_size == 256 ? 384 : 0);
 								disk_headers[i-1].atr_header.pars = mounts[i].status >> 4;
 								disk_headers[i-1].atr_header.pars_high = 0x00;
@@ -309,9 +313,14 @@ void main_sio_loop() {
 						disk_headers[i-1].atr_header.temp4 = disk_type;
 						if(last_drive == i)
 							last_drive = -1;
+						// If the disk is not read-only re-open in r/w mode.
+						if(!(disk_headers[i-1].atr_header.flags & 0x1)) {
+							f_close(&mounts[i].fil);
+							f_open(&mounts[i].fil, (const char *)mounts[i].mount_path, FA_WRITE | FA_READ);
+						}
 					}
 				}
-				f_close(&fil);
+				//f_close(&fil);
 			}else
 				set_last_access_error(i);
 			//f_mount(0, (const char *)mounts[i].mount_path, 1);
@@ -712,10 +721,10 @@ ignore_sio_command_frame:
 			if(cas_block_index == cas_header.chunk_length) {
 				if(offset < cas_size && mounts[0].mounted) {
 					mutex_enter_blocking(&fs_lock);
-					if(/* f_mount(&fatfs[0], (const char *)mounts[0].mount_path, 1) == FR_OK && */ f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
-						offset = cas_read_forward(&fil, offset);
-					}
-					f_close(&fil);
+					//if(/* f_mount(&fatfs[0], (const char *)mounts[0].mount_path, 1) == FR_OK && */ f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
+						offset = cas_read_forward(offset);
+					//}
+					//f_close(&fil);
 					// f_mount(0, (const char *)mounts[0].mount_path, 1);
 					mutex_exit(&fs_lock);
 					mounts[0].status = offset;
