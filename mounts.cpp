@@ -74,37 +74,27 @@ void init_locks() {
 
 void mount_file(char *f, int drive_number, char *lfn) {
 	int j;
-/*
 	bool read_only = false;
-	if(drive_number) {
-		// Prevent the same file to mounted in two different drive slots
-		// in write mode (It can work, but it is conceptually wrong to do it.)
-		for(j=1; j<=4; j++) {
-			if(j == drive_number)
-				continue;
-			if(!strcmp(mounts[j].mount_path, curr_path)){
-				read_only = true;
-				break;
-			}
-		}
-	}
-	if(read_only)
-		disk_headers[drive_number-1].atr_header.flags |= 0x01;
-*/
+
 	mutex_enter_blocking(&mount_lock);
+
 	if(mounts[drive_number].mounted)
 		f_close(&mounts[drive_number].fil);
 	if(drive_number) {
 		for(j=1; j<=4; j++) {
 			if(j == drive_number)
 				continue;
-			if(!strcmp(mounts[j].mount_path, curr_path) && !mounts[j].mounted){
-				mounts[j].mount_path[0] = 0;
-				strcpy(&mounts[j].str[3],"  <EMPTY>   ");
-				break;
+			if(!strcmp(mounts[j].mount_path, curr_path)) {
+				if(!mounts[j].mounted) {
+					mounts[j].mount_path[0] = 0;
+					strcpy(&mounts[j].str[3], "  <EMPTY>   ");
+				} else if(!(disk_headers[j-1].atr_header.flags & 0x01))
+					read_only = true;
 			}
 		}
 	}
+	if(read_only)
+		disk_headers[drive_number-1].atr_header.flags |= 0x01;
 	mounts[drive_number].mounted = true;
 	mounts[drive_number].status = 0;
 	strcpy((char *)mounts[drive_number].mount_path, curr_path);
@@ -118,12 +108,7 @@ void mount_file(char *f, int drive_number, char *lfn) {
 	}
 	if(size_lfn > 8)
 		mounts[drive_number].str[si+7] = '~';
-/*
-	while(j<12) {
-		mounts[drive_number].str[si+j] = (j < strlen(f) ? (f[j] < 0x80 ? f[j] : '_') : ' ');
-		j++;
-	}
-*/
+
 	mutex_exit(&mount_lock);
 }
 

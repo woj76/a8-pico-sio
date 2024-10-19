@@ -261,8 +261,10 @@
 /  bit1=1: Do not trust last allocated cluster number in the FSINFO.
 */
 
-
-#define FF_FS_LOCK		8
+// This enabled double check of what we control in the application nevertheless, 
+// this should not be necessary. The 6 for the maximum comes from: 4 disk
+// images, 1 cassette image, 1 directory xor 1 new file creation. 
+#define FF_FS_LOCK		6
 /* The option FF_FS_LOCK switches file lock function to control duplicated file open
 /  and illegal operation to open objects. This option must be 0 when FF_FS_READONLY
 /  is 1.

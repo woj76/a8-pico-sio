@@ -108,6 +108,8 @@ If you wish to compile the code yourself, get the [Pico development kit](https:/
 
 _`board`_ being for example **`pico`** (the default), **`pico2`**, or **`pimoroni-picolipo-16mb`**. Then call `make`. Then upload the resulting `a8-pico-sio.uf2` file to your board starting it in boot mode.
 
+**Note:** Do not unplug the Pico from your PC immediately after the flashing procedure is finished, give it time to initialize the FAT system on the rest of the FLASH memory, otherwise you can end up with a corrupted file system (which can lock down the device when working with Atari, or lock the USB drive when connected to the PC). If you do happen to corrupt the file system, or you are flashing the firmware to a "dirty" Pico, you need to find the `flash_nuke.uf2` file on the Internet and flash it first.
+
 ## (Sort of a) User Manual
 
 When everything is wired up properly and you connect the Pico to USB power you should see the display come up and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive) or resetting the saved settings to defaults. The settings are stored "secretly" in the FLASH area, not in any file on the internal FLASH USB drive, so you cannot modify the settings manually or remove the file, if you wonder.
@@ -151,7 +153,7 @@ For the tape images in the C: slot it works in a similar way, only the pictogram
 
 You can umount the slots while they are being read by the Atari, in which case the corresponding image transfer will of course fail. When the SD card is removed and there are any mounts referring to the files on the SD card, they will be fully emptied.
 
-A single disk image file can be mounted in only one disk slot, mounting it again in a different slot will fail (silently).
+A single disk image file can be mounted in only one disk slot in read-write mode, mounting it again in a different slot will mount it in read-only mode (unless the previous mount is in read-only mode, this can happen if a particular sequence of mounting / unmounting is applied).
 
 Rotation commands unmount all drive slots, move them up or down correspondingly, and remount the slots. This also means that the read-write status of multiply mounted single image is rotated accordingly.
 
