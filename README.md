@@ -6,7 +6,7 @@ An Atari 8-bit SIO drive and (turbo) tape emulator for a [Raspberry Pi Pico (2)]
 
 **First and foremost** - connecting this device to your 8-bit Atari might be dangerous (especially when not done right) to your precious 8-bit retro equipment. You do all this at your own risk and I will not be held liable if you break or destroy anything. Also, I am not an electrical engineer, so I could have made some potentially disastrous assumptions or decisions in the project (I did try my best not to). Furthermore, read this README file in its entirety before using the device. Once again: **USE AT YOUR OWN RISK!**
 
-In the following I also assume that you have basic knowledge of how the Atari 8-bit computer operates and that you can find out on the Internet how to install the Pico firmware by copying the UF2 file to your Pico board. I also assume that if you want to compile the firmware source code yourself you know how to go about it using your OS of choice (below I only give hints on how to target the different Pico boards).
+In the following I also assume that you have basic knowledge of how the Atari 8-bit computer operates and that you can find out on the Internet how to install the Pico firmware by copying the UF2 file to your Pico board. I also assume that if you want to compile the firmware source code yourself you know how to go about it using your OS of choice (below I only give hints on how to target the different Pico boards). Note also that the silk screen on the attached photos has a mistake, P3 should be P2, this is corrected in the Gerber files.
 
 ## What is it?
 
