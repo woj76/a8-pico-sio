@@ -49,7 +49,7 @@ static bool is_valid_file(char *filename) {
 	size_t i = get_filename_ext(filename);
 	switch(ft) {
 		case file_type::casette:
-			return !strcasecmp(&filename[i], "CAS");
+			return !strcasecmp(&filename[i], "CAS") || !strcasecmp(&filename[i], "WAV");
 		case file_type::disk:
 			return !strcasecmp(&filename[i], "ATR") || !strcasecmp(&filename[i], "ATX") || !strcasecmp(&filename[i], "XEX") || !strcasecmp(&filename[i], "COM") || !strcasecmp(&filename[i], "EXE");
 		default:

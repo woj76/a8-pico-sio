@@ -47,6 +47,22 @@ typedef struct __attribute__((__packed__)) {
 	} aux;
 } cas_header_type;
 
+typedef struct __attribute__((__packed__)) {
+	uint32_t chunk_id; // "RIFF"
+	uint32_t chunk_size; // == file_size - 8
+	uint32_t format; // "WAVE"
+	uint32_t subchunk1_id; // "fmt "
+	uint32_t subchunk1_size; // 16
+	uint16_t audio_format; // 1 ?
+	uint16_t num_channels; // 2
+	uint32_t sample_rate; // 44100
+	uint32_t byte_rate; // sample_rate * bitrate in bytes * num_channels
+	uint16_t block_align; // 4 == bit_rate_in_bytes * num_channels
+	uint16_t bits_per_sample; // 16
+	uint32_t subchunk2_id; // "data"
+	uint32_t subchunk2_size; // file_size - 44
+} wav_header_type;
+
 typedef union {
 	atr_header_type atr_header;
 	uint8_t data[sizeof(atr_header_type)];
@@ -100,6 +116,12 @@ void init_locks();
 #define cas_header_pwmc 0x636D7770
 #define cas_header_pwmd 0x646D7770
 #define cas_header_pwml 0x6C6D7770
+
+#define WAV_RIFF 0x46464952
+#define WAV_WAVE 0x45564157
+#define WAV_FMT 0x20746D66
+#define WAV_DATA 0x61746164
+#define WAV_LIST 0x5453494C
 
 void get_drive_label(int i);
 

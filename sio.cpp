@@ -184,6 +184,16 @@ static uint8_t try_receive_data(int drive_number, FSIZE_t to_read) {
 	return r;
 }
 
+// TODO which of these would have to be external
+uint wav_avg_reads;
+uint wav_avg_offset;
+uint32_t wav_silence_threshold;
+wav_header_type wav_header;
+uint8_t wav_sample_size;
+uint8_t wav_sample_div;
+uint wav_filter_window_size;
+uint32_t wav_scaled_sample_rate;
+
 void main_sio_loop() {
 	// FIL fil;
 	FILINFO fil_info;
@@ -202,7 +212,7 @@ void main_sio_loop() {
 				try_mount_sd();
 			else {
 				red_blinks = 4;
-				if(!curr_path[0])
+				if(!curr_path[0] || curr_path[0] == '1')
 					last_file_name[0] = 0;
 				sd_card_present = 0;
 				//sd_card_t *p_sd = sd_get_by_num(1);
@@ -244,12 +254,55 @@ void main_sio_loop() {
 			if(/*f_mount(&fatfs[0], (const char *)mounts[i].mount_path, 1) == FR_OK && */ f_stat((const char *)mounts[i].mount_path, &fil_info) == FR_OK && f_open(&mounts[i].fil, (const char *)mounts[i].mount_path, FA_READ) == FR_OK) {
 				if(!i) {
 					reinit_turbo_pio();
-					cas_sample_duration = timing_base_clock/600;
-					cas_size = f_size(&mounts[0].fil);
-					if(f_read(&mounts[i].fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
+					if(!strcasecmp(&mounts[i].mount_path[strlen(mounts[i].mount_path)-3], "CAS")) {
+						wav_sample_size = 0;
+						cas_sample_duration = (timing_base_clock+300)/600;
+						cas_size = f_size(&mounts[0].fil);
+						if(f_read(&mounts[i].fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
-						mounts[i].status = cas_read_forward(cas_header.chunk_length + sizeof(cas_header_type));
+								mounts[i].status = cas_read_forward(cas_header.chunk_length + sizeof(cas_header_type));
+					} else {
+						mounts[i].status = 0;
+						if(f_read(&mounts[i].fil, &wav_header, sizeof(wav_header_type), &bytes_read) == FR_OK &&
+								bytes_read == sizeof(wav_header_type)) {
+							mounts[i].status = sizeof(wav_header_type);
+							while(wav_header.subchunk2_id != WAV_DATA) {
+								mounts[i].status += wav_header.subchunk2_size;
+								f_lseek(&mounts[i].fil, mounts[i].status);
+								if(f_read(&mounts[i].fil, &wav_header.subchunk2_id, 8, &bytes_read) != FR_OK || bytes_read != 8) {
+									mounts[i].status = 0;
+									break;
+								}
+								mounts[i].status += 8;
+							}
+							if(
+								!mounts[i].status ||
+								wav_header.chunk_id != WAV_RIFF  ||
+								wav_header.format != WAV_WAVE ||
+								wav_header.subchunk1_id != WAV_FMT ||
+								wav_header.subchunk1_size != 16 ||
+								wav_header.audio_format != 1 ||
+								wav_header.byte_rate != wav_header.sample_rate * wav_header.block_align ||
+								wav_header.block_align != (wav_header.bits_per_sample / 8) * wav_header.num_channels
+							)
+								mounts[i].status = 0;
+							else {
+								wav_avg_reads = 0;
+								wav_avg_offset = 0;
+								cas_size = mounts[i].status + wav_header.subchunk2_size;
+								wav_sample_size = (wav_header.bits_per_sample == 16) ? 2 : 1;
+								wav_silence_threshold = wav_header.sample_rate / 32;
+								wav_sample_div = wav_header.sample_rate > 48000 ? 2 : 1;
+								wav_filter_window_size = wav_header.sample_rate < 441000 ? 12 : 20*wav_sample_div;
+								// TODO NTSC/PAL distinction
+								// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
+								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : 31668;
+								cas_sample_duration = (timing_base_clock+wav_scaled_sample_rate/2)/wav_scaled_sample_rate;
+								pwm_sample_duration = cas_sample_duration;
+							}
+						}
+					}
 					if(!mounts[i].status)
 						set_last_access_error(i);
 					else if(last_drive == 0)
@@ -691,14 +744,14 @@ ignore_sio_command_frame:
 						ld = *(uint16_t *)&sector_buffer[i];
 						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
 						if(ld != 0)
-							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? 2*pwm_sample_duration : (timing_base_clock/10000))*ld);
+							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? pwm_sample_duration : (timing_base_clock/10000))*ld);
 						cas_fsk_bit ^= 1;
 						break;
 					case cas_header_pwmc:
 						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
 						for(uint16_t j=0; j<ld; j++) {
-							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration);
-							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration);
+							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration/2);
+							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration/2);
 						}
 						break;
 					case cas_header_pwmd:
@@ -710,8 +763,8 @@ ignore_sio_command_frame:
 						}
 						for(int j=bs; j!=be; j += bd) {
 							uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
-							pio_enqueue(pwm_bit, d*pwm_sample_duration);
-							pio_enqueue(pwm_bit^1, d*pwm_sample_duration);
+							pio_enqueue(pwm_bit, d*pwm_sample_duration/2);
+							pio_enqueue(pwm_bit^1, d*pwm_sample_duration/2);
 						}
 						break;
 					default:

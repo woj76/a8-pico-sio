@@ -143,7 +143,7 @@ void pio_enqueue(uint8_t b, uint32_t d) {
 }
 
 void init_io() {
-	// timing_base_clock = clock_get_hz(clk_sys);
+	//timing_base_clock = clock_get_hz(clk_sys);
 	timing_base_clock = 1000000;
 	// How much "silence" can the PIO produce in one step:
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;

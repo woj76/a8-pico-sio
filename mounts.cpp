@@ -181,7 +181,7 @@ FSIZE_t cas_read_forward(FSIZE_t offset) {
 					offset = 0;
 					goto cas_read_forward_exit;
 				}
-				cas_sample_duration = timing_base_clock/cas_header.aux.aux_w;
+				cas_sample_duration = (timing_base_clock+cas_header.aux.aux_w/2)/cas_header.aux.aux_w;
 				break;
 			case cas_header_data:
 				cas_block_turbo = false;
@@ -215,7 +215,7 @@ FSIZE_t cas_read_forward(FSIZE_t offset) {
 					goto cas_read_forward_exit;
 				}
 				offset += bytes_read;
-				pwm_sample_duration = timing_base_clock/(2*pwm_sample_duration);
+				pwm_sample_duration = (timing_base_clock+pwm_sample_duration/2)/pwm_sample_duration;
 				break;
 			case cas_header_pwmc:
 				cas_block_turbo = true;
