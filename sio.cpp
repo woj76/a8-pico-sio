@@ -193,6 +193,56 @@ uint8_t wav_sample_size;
 uint8_t wav_sample_div;
 uint wav_filter_window_size;
 uint32_t wav_scaled_sample_rate;
+uint32_t wav_last_silence;
+uint32_t wav_last_count;
+
+#define zcoeff1 27601
+#define zcoeff2 23774
+
+static int32_t goertzal_int8(int8_t *x, int16_t zcoeff) {
+	int32_t z;
+	int32_t zprev = 0;
+	int32_t zprev2 = 0;
+	int8_t xn;
+	for(int n=0; n<wav_filter_window_size; n += wav_sample_div) {
+		z = (x[n*wav_header.num_channels]<<2) + ((zcoeff*zprev)>>14) - zprev2;
+		zprev2 = zprev;
+		zprev = z;
+	}
+	return (zprev2*zprev2 + zprev*zprev - ((zcoeff*zprev)>>14)*zprev2) >> 5;
+}
+
+static int32_t goertzal_int16(int16_t *x, int16_t zcoeff) {
+	int32_t z;
+	int32_t zprev = 0;
+	int32_t zprev2 = 0;
+	for(int n=0; n<wav_filter_window_size; n += wav_sample_div) {
+		z = (x[n*wav_header.num_channels]>>6) + ((zcoeff*zprev)>>14) - zprev2;
+		zprev2 = zprev;
+		zprev = z;
+	}
+	return (zprev2*zprev2 + zprev*zprev - ((zcoeff*zprev)>>14)*zprev2) >> 5;
+}
+
+#define NUM_READS_SH 4
+#define NUM_READS (1u << NUM_READS_SH)
+
+static int32_t filter_avg(int32_t s) {
+	static int32_t values[NUM_READS];
+	values[wav_avg_offset] = s;
+	wav_avg_offset = (wav_avg_offset + 1) & (NUM_READS-1);
+	wav_avg_reads++;
+	int32_t res=0;
+	if(wav_avg_reads < NUM_READS)
+		res = values[wav_avg_offset-1];
+	else {
+		for(int i=0; i<NUM_READS; i++)
+			res += values[i];
+		// res /= NUM_READS;
+		res >>= NUM_READS_SH;
+	}
+	return res;
+}
 
 void main_sio_loop() {
 	// FIL fil;
@@ -258,15 +308,15 @@ void main_sio_loop() {
 						wav_sample_size = 0;
 						cas_sample_duration = (timing_base_clock+300)/600;
 						cas_size = f_size(&mounts[0].fil);
+						wav_filter_window_size = 0;
 						if(f_read(&mounts[i].fil, &cas_header, sizeof(cas_header_type), &bytes_read) == FR_OK &&
 							bytes_read == sizeof(cas_header_type) &&
 							cas_header.signature == cas_header_FUJI)
 								mounts[i].status = cas_read_forward(cas_header.chunk_length + sizeof(cas_header_type));
 					} else {
 						mounts[i].status = 0;
-						if(f_read(&mounts[i].fil, &wav_header, sizeof(wav_header_type), &bytes_read) == FR_OK &&
-								bytes_read == sizeof(wav_header_type)) {
-							mounts[i].status = sizeof(wav_header_type);
+						if(f_read(&mounts[i].fil, &wav_header, sizeof(wav_header_type), &bytes_read) == FR_OK && bytes_read == sizeof(wav_header_type)) {
+							mounts[i].status = bytes_read;
 							while(wav_header.subchunk2_id != WAV_DATA) {
 								mounts[i].status += wav_header.subchunk2_size;
 								f_lseek(&mounts[i].fil, mounts[i].status);
@@ -276,30 +326,28 @@ void main_sio_loop() {
 								}
 								mounts[i].status += 8;
 							}
-							if(
-								!mounts[i].status ||
-								wav_header.chunk_id != WAV_RIFF  ||
-								wav_header.format != WAV_WAVE ||
-								wav_header.subchunk1_id != WAV_FMT ||
-								wav_header.subchunk1_size != 16 ||
-								wav_header.audio_format != 1 ||
-								wav_header.byte_rate != wav_header.sample_rate * wav_header.block_align ||
-								wav_header.block_align != (wav_header.bits_per_sample / 8) * wav_header.num_channels
-							)
-								mounts[i].status = 0;
-							else {
+							if(!mounts[i].status || wav_header.chunk_id != WAV_RIFF || wav_header.format != WAV_WAVE || wav_header.subchunk1_id != WAV_FMT ||
+								wav_header.subchunk1_size != 16 || wav_header.audio_format != 1 || wav_header.byte_rate != wav_header.sample_rate * wav_header.block_align ||
+								wav_header.block_align != (wav_header.bits_per_sample / 8) * wav_header.num_channels) {
+									mounts[i].status = 0;
+							} else {
 								wav_avg_reads = 0;
 								wav_avg_offset = 0;
 								cas_size = mounts[i].status + wav_header.subchunk2_size;
+								// TODO depending on an option
+								cas_block_turbo = false;
 								wav_sample_size = (wav_header.bits_per_sample == 16) ? 2 : 1;
 								wav_silence_threshold = wav_header.sample_rate / 32;
-								wav_sample_div = wav_header.sample_rate > 48000 ? 2 : 1;
-								wav_filter_window_size = wav_header.sample_rate < 441000 ? 12 : 20*wav_sample_div;
-								// TODO NTSC/PAL distinction
+								wav_sample_div = (wav_header.sample_rate > 48000) ? 2 : 1;
+								wav_filter_window_size = wav_header.sample_rate < 44100 ? 12 : 20*wav_sample_div;
 								// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
-								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : 31668;
+								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : (current_options[clock_option_index] ? 31960 : 31668);
 								cas_sample_duration = (timing_base_clock+wav_scaled_sample_rate/2)/wav_scaled_sample_rate;
 								pwm_sample_duration = cas_sample_duration;
+								wav_last_silence = 0;
+								pwm_bit = 0;
+								cas_fsk_bit = 0;
+								wav_last_count = 0;
 							}
 						}
 					}
@@ -699,11 +747,15 @@ ignore_sio_command_frame:
 			blue_blinks = 0;
 			update_rgb_led(false);
 			mutex_exit(&mount_lock);
-		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset < cas_size &&
+		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset + wav_filter_window_size*wav_header.block_align < cas_size &&
 			(cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
 				(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask))) {
+
+			if(wav_sample_size)
+				to_read = std::min((uint32_t)sector_buffer_size, cas_size - offset);
+			else
+				to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 			mutex_enter_blocking(&mount_lock);
-			to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
 			if(mounted_file_transfer(0, offset, to_read, false) != FR_OK) {
 				set_last_access_error(0);
 				mutex_exit(&mount_lock);
@@ -714,68 +766,111 @@ ignore_sio_command_frame:
 			blue_blinks = cas_block_turbo ? -1 : 0;
 			update_rgb_led(false);
 			offset += to_read;
-			cas_block_index += to_read;
-			mounts[0].status = offset;
+			mounts[0].status = offset - wav_filter_window_size*wav_header.block_align;
 			gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
-			uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
-			while(silence_duration > 0) {
-				uint16_t silence_block_len = silence_duration;
-				if(silence_block_len >= max_clock_ms)
-					silence_block_len = max_clock_ms;
-				pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
-				silence_duration -= silence_block_len;
-			}
-			int bs, be, bd;
-			uint8_t b;
-			uint16_t ld;
-			for(i=0; i < to_read; i += cas_block_multiple) {
-				switch(cas_header.signature) {
-					case cas_header_data:
-						pio_enqueue(0, cas_sample_duration);
-						b = sector_buffer[i];
-						for(int j=0; j!=8; j++) {
-							pio_enqueue(b & 0x1, cas_sample_duration);
-							b >>= 1;
+			if(wav_sample_size) {
+				// WAV file
+				offset = 0;
+				while(offset + wav_filter_window_size*wav_header.block_align < to_read) {
+					int32_t g1, g2;
+					int16_t wav_last_sample = 0;
+					if(wav_sample_size == 2) {
+						int16_t *v = (int16_t *)&sector_buffer[offset+2*(wav_header.num_channels-1)];
+						g1 = goertzal_int16(v, zcoeff1);
+						g2 = goertzal_int16(v, zcoeff2);
+						wav_last_sample = *v;
+					}else{
+						int8_t *v = (int8_t *)&sector_buffer[offset+(wav_header.num_channels-1)];
+						g1 = goertzal_int8(v, zcoeff1);
+						g2 = goertzal_int8(v, zcoeff2);
+						wav_last_sample = *v * 256;
+					}
+					// TODO Increase the silence threshold from 1000?
+					if(wav_last_sample >= -1000 && wav_last_sample <= 1000)
+						wav_last_silence++;
+					else
+						wav_last_silence = 0;
+					offset += wav_sample_div*wav_header.block_align;
+					if(wav_last_silence > wav_silence_threshold)
+						pwm_bit = 0;
+					else
+						pwm_bit = filter_avg(g2-g1) <= 0;
+
+					if(pwm_bit == cas_fsk_bit)
+						wav_last_count++;
+					else {
+						while(wav_last_count > 0) {
+							uint32_t wav_scaled_bit_duration = std::min(wav_last_count, (uint32_t)0x8000);
+							wav_last_count -= wav_scaled_bit_duration;
+							wav_scaled_bit_duration = wav_sample_div*wav_scaled_bit_duration*wav_scaled_sample_rate/wav_header.sample_rate;
+							if(wav_scaled_bit_duration)
+								// TODO Or the inverse?
+								pio_enqueue(cas_fsk_bit^1, wav_scaled_bit_duration*cas_sample_duration);
 						}
-						pio_enqueue(1, cas_sample_duration);
-						break;
-					case cas_header_fsk:
-					case cas_header_pwml:
-						ld = *(uint16_t *)&sector_buffer[i];
-						// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
-						if(ld != 0)
-							pio_enqueue(cas_fsk_bit, (cas_block_turbo ? pwm_sample_duration : (timing_base_clock/10000))*ld);
-						cas_fsk_bit ^= 1;
-						break;
-					case cas_header_pwmc:
-						ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
-						for(uint16_t j=0; j<ld; j++) {
-							pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration/2);
-							pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration/2);
-						}
-						break;
-					case cas_header_pwmd:
-						b = sector_buffer[i];
-						if (pwm_bit_order) {
-							bs=7; be=-1; bd=-1;
-						} else {
-							bs=0; be=8; bd=1;
-						}
-						for(int j=bs; j!=be; j += bd) {
-							uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
-							pio_enqueue(pwm_bit, d*pwm_sample_duration/2);
-							pio_enqueue(pwm_bit^1, d*pwm_sample_duration/2);
-						}
-						break;
-					default:
-						break;
+						cas_fsk_bit = pwm_bit;
+						wav_last_count = 1;
+					}
 				}
-			}
-			if(cas_block_index == cas_header.chunk_length) {
-				if(offset < cas_size && mounts[0].mounted) {
+			} else {
+				// CAS file
+				cas_block_index += to_read;
+				uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
+				while(silence_duration > 0) {
+					uint16_t silence_block_len = silence_duration;
+					if(silence_block_len >= max_clock_ms)
+					silence_block_len = max_clock_ms;
+					pio_enqueue(silence_bit, (timing_base_clock/1000)*silence_block_len);
+					silence_duration -= silence_block_len;
+				}
+				int bs, be, bd;
+				uint8_t b;
+				uint16_t ld;
+				for(i=0; i < to_read; i += cas_block_multiple) {
+					switch(cas_header.signature) {
+						case cas_header_data:
+							pio_enqueue(0, cas_sample_duration);
+							b = sector_buffer[i];
+							for(int j=0; j!=8; j++) {
+								pio_enqueue(b & 0x1, cas_sample_duration);
+								b >>= 1;
+							}
+							pio_enqueue(1, cas_sample_duration);
+							break;
+						case cas_header_fsk:
+						case cas_header_pwml:
+							ld = *(uint16_t *)&sector_buffer[i];
+							// ld = (sector_buffer[i] & 0xFF) | ((sector_buffer[i+1] << 8) & 0xFF00);
+							if(ld != 0)
+								pio_enqueue(cas_fsk_bit, (cas_block_turbo ? pwm_sample_duration : (timing_base_clock/10000))*ld);
+							cas_fsk_bit ^= 1;
+							break;
+						case cas_header_pwmc:
+							ld = (sector_buffer[i+1] & 0xFF) | ((sector_buffer[i+2] << 8) & 0xFF00);
+							for(uint16_t j=0; j<ld; j++) {
+								pio_enqueue(pwm_bit, sector_buffer[i]*pwm_sample_duration/2);
+								pio_enqueue(pwm_bit^1, sector_buffer[i]*pwm_sample_duration/2);
+							}
+							break;
+						case cas_header_pwmd:
+							b = sector_buffer[i];
+							if (pwm_bit_order) {
+								bs=7; be=-1; bd=-1;
+							} else {
+								bs=0; be=8; bd=1;
+							}
+							for(int j=bs; j!=be; j += bd) {
+								uint8_t d = cas_header.aux.aux_b[(b >> j) & 0x1];
+								pio_enqueue(pwm_bit, d*pwm_sample_duration/2);
+								pio_enqueue(pwm_bit^1, d*pwm_sample_duration/2);
+							}
+						default:
+							break;
+					}
+				}
+				if(cas_block_index == cas_header.chunk_length && offset < cas_size && mounts[0].mounted) {
 					mutex_enter_blocking(&fs_lock);
 					//if(/* f_mount(&fatfs[0], (const char *)mounts[0].mount_path, 1) == FR_OK && */ f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
-						offset = cas_read_forward(offset);
+					offset = cas_read_forward(offset);
 					//}
 					//f_close(&fil);
 					// f_mount(0, (const char *)mounts[0].mount_path, 1);
@@ -789,9 +884,9 @@ ignore_sio_command_frame:
 						// This is to account for the possible motor off switching lag
 						sleep_ms(10);
 					}
-				}else
-					blue_blinks = 0;
+				}
 			}
+			blue_blinks = 0;
 			green_blinks = 0;
 			update_rgb_led(false);
 			mutex_exit(&mount_lock);

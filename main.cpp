@@ -1177,8 +1177,12 @@ void core1_entry() {
 
 int main() {
 
-	// Overclocking does not seem to be required
-	// set_sys_clock_khz(250000, true);
+	// Overclocking is required for WAV support on Pico 1
+	// TODO try different speeds to find a lower one
+	// 150?
+#ifndef RASPBERRYPI_PICO2
+	set_sys_clock_khz(250000, true);
+#endif
 
 	// Core 1 can lockout this one when needed (for writing to the FLASH)
 
@@ -1342,10 +1346,10 @@ int main() {
 				mutex_exit(&mount_lock);
 			}
 		}
-		FSIZE_t s = mounts[0].status;
+		FSIZE_t s = mounts[0].status >> 8;
 		if(cursor_prev == -1 || (mounts[0].mounted && s != last_cas_offset)) {
 			if(s < 0) s = 0;
-			cas_pg.update(cas_pg_width*s/cas_size);
+			cas_pg.update(cas_pg_width*s/(cas_size >> 8));
 			last_cas_offset = s;
 		}
 		update_main_menu_buttons();
