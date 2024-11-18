@@ -377,8 +377,8 @@ void main_sio_loop() {
 								// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
 								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : (current_options[clock_option_index] ? 31960 : 31668);
 								cas_sample_duration = (timing_base_clock+wav_scaled_sample_rate/2)/wav_scaled_sample_rate;
-								// TODO can probably just use one of those
 								silence_duration = 500; // Extra .5s of silence at the beginning TODO value?
+								// TODO can probably just use one of those
 								pwm_sample_duration = cas_sample_duration;
 								wav_last_silence = 0;
 								pwm_bit = 1;
@@ -826,8 +826,9 @@ ignore_sio_command_frame:
 					if(wav_sample_size) {
 						// WAV file
 						// TODO Alternatively push if the last block was silent (no pushing)
-						//if(!wav_last_block_pio){
-						if(wav_last_count > wav_silence_threshold) {
+						// This works better with Super Fortuna
+						if(!wav_last_block_pio){
+						//if(wav_last_count > wav_silence_threshold) {
 							uint32_t wav_scaled_bit_duration = wav_sample_div*wav_last_count*wav_scaled_sample_rate/wav_header.sample_rate;
 							wav_last_count = 0;
 							pio_enqueue(cas_fsk_bit, wav_scaled_bit_duration*cas_sample_duration);

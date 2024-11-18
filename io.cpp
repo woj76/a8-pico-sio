@@ -120,7 +120,7 @@ queue_t pio_queue;
 // 16*8 also fails sometimes with the 1MHz base clock
 // 128 is seems to be required for WAV
 // TODO drop this back to 64?
-const int pio_queue_size = 128*8;
+const int pio_queue_size = 64*8;
 
 uint32_t pio_e;
 
@@ -146,30 +146,42 @@ void flush_pio() {
 	t = save_and_disable_interrupts();
 	wav_sample_size = 0;
 	restore_interrupts(t);
-	pio_sm_set_enabled(cas_pio, sm, false);
-	pio_sm_set_enabled(cas_pio, sm_turbo, false);
-	while(queue_try_remove(&pio_queue, &t))
-		sleep_ms(1);
-	pio_sm_restart(cas_pio, sm);
-	pio_sm_restart(cas_pio, sm_turbo);
 	pio_sm_set_enabled(cas_pio, sm, true);
 	pio_sm_set_enabled(cas_pio, sm_turbo, true);
+	//queue_free(&pio_queue);
+	//queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
+	//while(queue_try_remove(&pio_queue, &t))
+	//	tight_loop_contents();
+	//while(!queue_is_empty(&pio_queue))
+	//		tight_loop_contents();
+		//sleep_ms(1);
+	//pio_sm_set_enabled(cas_pio, sm, true);
+	//pio_sm_set_enabled(cas_pio, sm_turbo, true);
+	pio_sm_restart(cas_pio, sm);
+	pio_sm_restart(cas_pio, sm_turbo);
 	//pio_interrupt_clear(cas_pio, 7);
 }
 
+#define MOTOR_DELAY 25
+
 static bool repeating_timer_motor(struct repeating_timer *t) {
+	static uint motor_delay = MOTOR_DELAY; // *10ms
 	if(wav_sample_size) {
 		if(!cas_motor_on()) {
 			//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_irq_set(false, 7));
 			//sleep_ms(1);
 			//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_wait_irq(0, false, 7));
 			pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, false);
+			motor_delay = MOTOR_DELAY;
 			blue_blinks = 0;
 			green_blinks = 0;
 			update_rgb_led(false);
 		} else {
 			//pio_interrupt_clear(cas_pio, 7);
-			pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, true);
+			if(motor_delay)
+				motor_delay--;
+			else
+				pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, true);
 		}
 	}
 
@@ -178,6 +190,10 @@ static bool repeating_timer_motor(struct repeating_timer *t) {
 
 void pio_enqueue(uint8_t b, uint32_t d) {
 	uint32_t e = (b^(cas_block_turbo ? turbo_conf[2] : 0) | ((d - pio_prog_cycle_corr) << 1));
+//	queue_try_add(&pio_queue, &e);
+//	absolute_time_t t = make_timeout_time_ms(1250); // According to Avery's manual 950us
+//	while (!gpio_get(command_line_pin) && absolute_time_diff_us(get_absolute_time(), t) > 0)
+//		tight_loop_contents();
 	queue_add_blocking(&pio_queue, &e);
 	if(!dma_going) {
 		dma_block_turbo = cas_block_turbo;
