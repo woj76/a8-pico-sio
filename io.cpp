@@ -22,6 +22,7 @@
 #include "io.hpp"
 
 #include "options.hpp"
+#include "led_indicator.hpp"
 #include "pin_io.pio.h"
 
 // const uint led_pin = 25;
@@ -117,7 +118,9 @@ int dma_channel, dma_channel_turbo;
 queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
 // 16*8 also fails sometimes with the 1MHz base clock
-const int pio_queue_size = 64*8;
+// 128 is seems to be required for WAV
+// TODO drop this back to 64?
+const int pio_queue_size = 128*8;
 
 uint32_t pio_e;
 
@@ -133,6 +136,46 @@ static void dma_handler() {
 		dma_going = false;
 }
 
+bool cas_motor_on() {
+	return (cas_block_turbo ? turbo_motor_value_on : normal_motor_value_on) ==
+		(gpio_get_all() & (cas_block_turbo ? turbo_motor_pin_mask : normal_motor_pin_mask));
+}
+
+void flush_pio() {
+	uint32_t t;
+	t = save_and_disable_interrupts();
+	wav_sample_size = 0;
+	restore_interrupts(t);
+	pio_sm_set_enabled(cas_pio, sm, false);
+	pio_sm_set_enabled(cas_pio, sm_turbo, false);
+	while(queue_try_remove(&pio_queue, &t))
+		sleep_ms(1);
+	pio_sm_restart(cas_pio, sm);
+	pio_sm_restart(cas_pio, sm_turbo);
+	pio_sm_set_enabled(cas_pio, sm, true);
+	pio_sm_set_enabled(cas_pio, sm_turbo, true);
+	//pio_interrupt_clear(cas_pio, 7);
+}
+
+static bool repeating_timer_motor(struct repeating_timer *t) {
+	if(wav_sample_size) {
+		if(!cas_motor_on()) {
+			//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_irq_set(false, 7));
+			//sleep_ms(1);
+			//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_wait_irq(0, false, 7));
+			pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, false);
+			blue_blinks = 0;
+			green_blinks = 0;
+			update_rgb_led(false);
+		} else {
+			//pio_interrupt_clear(cas_pio, 7);
+			pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, true);
+		}
+	}
+
+	return true;
+}
+
 void pio_enqueue(uint8_t b, uint32_t d) {
 	uint32_t e = (b^(cas_block_turbo ? turbo_conf[2] : 0) | ((d - pio_prog_cycle_corr) << 1));
 	queue_add_blocking(&pio_queue, &e);
@@ -143,8 +186,8 @@ void pio_enqueue(uint8_t b, uint32_t d) {
 }
 
 void init_io() {
-	timing_base_clock = clock_get_hz(clk_sys);
-	//timing_base_clock = 1000000;
+	//timing_base_clock = clock_get_hz(clk_sys);
+	timing_base_clock = 1000000;
 	// How much "silence" can the PIO produce in one step:
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
@@ -214,4 +257,7 @@ void init_io() {
 	uart_set_fifo_enabled(uart1, false);
 	uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
 
+	static struct repeating_timer tmr;
+	// TODO how often?
+	add_repeating_timer_ms(10, repeating_timer_motor, NULL, &tmr);
 }

@@ -1178,9 +1178,8 @@ void core1_entry() {
 int main() {
 
 	// Overclocking is required for WAV support on Pico 1
-	// TODO try different speeds to find a lower one
-	// 150?
 #ifndef RASPBERRYPI_PICO2
+	// TODO try without overclock, measure complete read without overclock
 	set_sys_clock_khz(250000, true);
 #endif
 
@@ -1193,11 +1192,6 @@ int main() {
 	graphics.set_pen(BG); graphics.clear();
 
 	init_rgb_led();
-
-/*
-	if(button_a.read())
-		usb_drive();
-*/
 
 	int x = text_location.x;
 	print_text("A", 1); text_location.x += 2*8*font_scale;
@@ -1336,6 +1330,7 @@ int main() {
 					mounts[d].mounted = false;
 					blue_blinks = 0;
 					update_rgb_led(false);
+					if(!d) flush_pio();
 				} else {
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;

@@ -62,7 +62,10 @@ extern volatile bool cas_block_turbo;
 extern volatile bool dma_block_turbo;
 extern uint sm;
 extern uint sm_turbo;
+extern volatile uint8_t wav_sample_size;
 
 void init_io();
 void reinit_turbo_pio();
 void pio_enqueue(uint8_t b, uint32_t d);
+bool cas_motor_on();
+void flush_pio();
