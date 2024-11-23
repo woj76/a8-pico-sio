@@ -84,7 +84,7 @@ extern disk_header_type disk_headers[];
 #define disk_type_xex 2
 #define disk_type_atx 3
 
-#define sector_buffer_size 768
+#define sector_buffer_size 2048
 extern uint8_t sector_buffer[];
 
 extern cas_header_type cas_header;

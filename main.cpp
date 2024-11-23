@@ -1180,7 +1180,7 @@ int main() {
 	// Overclocking is required for WAV support on Pico 1
 #ifndef RASPBERRYPI_PICO2
 	// TODO try without overclock, measure complete read without overclock
-	//set_sys_clock_khz(250000, true);
+	set_sys_clock_khz(250000, true);
 #endif
 
 	// Core 1 can lockout this one when needed (for writing to the FLASH)
@@ -1323,6 +1323,8 @@ int main() {
 			}
 		}else if(button_b.read()) {
 			if(d != -1) {
+				if(!d && wav_sample_size && mounts[d].mounted)
+					flush_pio();
 				mutex_enter_blocking(&mount_lock);
 				if(mounts[d].mounted) {
 					f_close(&mounts[d].fil);
@@ -1330,7 +1332,6 @@ int main() {
 					mounts[d].mounted = false;
 					blue_blinks = 0;
 					update_rgb_led(false);
-					if(!d) flush_pio();
 				} else {
 					if(mounts[d].mount_path[0]) {
 						mounts[d].mounted = true;

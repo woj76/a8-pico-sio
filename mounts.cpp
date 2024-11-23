@@ -76,6 +76,9 @@ void mount_file(char *f, int drive_number, char *lfn) {
 	int j;
 	bool read_only = false;
 
+	if(!drive_number)
+		flush_pio();
+
 	mutex_enter_blocking(&mount_lock);
 
 	if(mounts[drive_number].mounted)
@@ -92,8 +95,7 @@ void mount_file(char *f, int drive_number, char *lfn) {
 					read_only = true;
 			}
 		}
-	} else
-		flush_pio();
+	}
 	if(read_only)
 		disk_headers[drive_number-1].atr_header.flags |= 0x01;
 	mounts[drive_number].mounted = true;
