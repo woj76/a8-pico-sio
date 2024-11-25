@@ -14,9 +14,9 @@
 
 #pragma once
 
-#include "pico/multicore.h"
-
 #include "config.h"
+
+#include "pico/multicore.h"
 
 #include "ff.h"
 
@@ -84,7 +84,12 @@ extern disk_header_type disk_headers[];
 #define disk_type_xex 2
 #define disk_type_atx 3
 
+#ifdef WAV_96K
 #define sector_buffer_size 2048
+#else
+#define sector_buffer_size 1024
+#endif
+
 extern uint8_t sector_buffer[];
 
 extern cas_header_type cas_header;

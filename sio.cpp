@@ -202,8 +202,8 @@ bool cas_last_block_marker;
 uint32_t wav_last_duration;
 uint8_t wav_last_duration_bit;
 
-int16_t zcoeff1; // =27601;
-int16_t zcoeff2; //=23774;
+int16_t zcoeff1;
+int16_t zcoeff2;
 
 static int32_t goertzal_int8(int8_t *x, int16_t zcoeff) {
 	int32_t z;
@@ -230,27 +230,9 @@ static int32_t goertzal_int16(int16_t *x, int16_t zcoeff) {
 	return (zprev2*zprev2 + zprev*zprev - ((zcoeff*zprev)>>14)*zprev2) >> 5;
 }
 
+// Stepping average over the last 16 values
 #define NUM_READS_SH 4
 #define NUM_READS (1u << NUM_READS_SH)
-
-/*
-static int32_t filter_avg(int32_t s) {
-	static int32_t values[NUM_READS];
-	values[wav_avg_offset] = s;
-	wav_avg_offset = (wav_avg_offset + 1) & (NUM_READS-1);
-	wav_avg_reads++;
-	int32_t res=0;
-	if(wav_avg_reads < NUM_READS)
-		res = values[wav_avg_offset-1];
-	else {
-		for(int i=0; i<NUM_READS; i++)
-			res += values[i];
-		// res /= NUM_READS;
-		res >>= NUM_READS_SH;
-	}
-	return res;
-}
-*/
 
 static int32_t filter_avg(int32_t s) {
 	static int32_t values[NUM_READS];
@@ -364,14 +346,12 @@ void main_sio_loop() {
 								float coeff2 = 2.0*cosf(2.0*M_PI*(5327.0*wav_sample_div/(float)wav_header.sample_rate));
 								zcoeff1 = coeff1*(1<<14);
 								zcoeff2 = coeff2*(1<<14);
-								//zcoeff1=27601;
-								//zcoeff2=23774;
 
 								wav_filter_window_size = wav_header.sample_rate < 44100 ? 12 : 20*wav_sample_div;
 								// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
 								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : (current_options[clock_option_index] ? 31960 : 31668);
 								cas_sample_duration = (timing_base_clock+wav_scaled_sample_rate/2)/wav_scaled_sample_rate;
-								silence_duration = 500; // Extra .5s of silence at the beginning TODO value?
+								silence_duration = 500; // Extra .5s of silence at the beginning
 								// TODO can probably just use one of those
 								pwm_sample_duration = cas_sample_duration;
 								wav_last_silence = 0;
@@ -784,9 +764,8 @@ ignore_sio_command_frame:
 			if(wav_sample_size || cas_motor_on()) {
 				if(wav_sample_size)
 					to_read = std::min((uint32_t)sector_buffer_size, cas_size - offset);
-				else {
+				else
 					to_read = std::min(cas_header.chunk_length-cas_block_index, (cas_block_turbo ? 128 : 256)*cas_block_multiple);
-				}
 				mutex_enter_blocking(&mount_lock);
 				if(!wav_sample_size) {
 					green_blinks = -1;
@@ -821,8 +800,7 @@ ignore_sio_command_frame:
 					// when decoding the last WAV sample block
 					if(!cas_last_block_marker) {
 					//if(wav_last_count > wav_silence_threshold) {
-						// TODO last change here, does Draconus still load with this?
-						uint32_t wav_scaled_bit_duration = (wav_sample_div*wav_last_count*wav_scaled_sample_rate/*+wav_header.sample_rate/2*/)/wav_header.sample_rate;
+						uint32_t wav_scaled_bit_duration = wav_sample_div*wav_last_count*wav_scaled_sample_rate/wav_header.sample_rate;
 						wav_last_count = 0;
 						pio_enqueue(cas_fsk_bit, wav_scaled_bit_duration*cas_sample_duration);
 						if(cas_fsk_bit == wav_last_duration_bit)
@@ -848,7 +826,6 @@ ignore_sio_command_frame:
 							g2 = goertzal_int8(v, zcoeff2);
 							wav_last_sample = *v * 256;
 						}
-						// TODO Increase the silence threshold from 1000?
 						//if(wav_last_sample >= -1000 && wav_last_sample <= 1000)
 						if(wav_last_sample >= -3200 && wav_last_sample <= 3200)
 							wav_last_silence++;
@@ -860,18 +837,10 @@ ignore_sio_command_frame:
 						if(pwm_bit == cas_fsk_bit)
 							wav_last_count++;
 						else {
-							//if(wav_last_count*wav_sample_div/wav_header.sample_rate > 10)
-							//	wav_last_count = wav_last_count*4/5;
-								//wav_last_count = 16*wav_header.sample_rate/wav_sample_div;
-							//while(wav_last_count) {
-								//uint32_t wav_scaled_bit_duration = std::min(wav_last_count, (uint32_t)0x8000);
-								//wav_last_count -= wav_scaled_bit_duration;
-								//wav_scaled_bit_duration = wav_sample_div*wav_scaled_bit_duration*wav_scaled_sample_rate/wav_header.sample_rate;
-								// TODO another change here
-							uint32_t wav_scaled_bit_duration = (wav_sample_div*wav_last_count*wav_scaled_sample_rate /*+wav_header.sample_rate/2*/)/wav_header.sample_rate;
-								// The first alternative filters stray signal flips in the long steady signal blocks
+							uint32_t wav_scaled_bit_duration = wav_sample_div*wav_last_count*wav_scaled_sample_rate/wav_header.sample_rate;
+							// The first alternative filters stray signal flips in the long steady signal blocks
 							if((wav_last_duration < 1500 || wav_scaled_bit_duration > 10 || wav_last_duration_bit) && wav_scaled_bit_duration) {
-								//if(wav_scaled_bit_duration) {
+							//if(wav_scaled_bit_duration) {
 								pio_enqueue(cas_fsk_bit, wav_scaled_bit_duration*cas_sample_duration);
 								if(cas_fsk_bit == wav_last_duration_bit)
 									wav_last_duration += wav_scaled_bit_duration;
@@ -880,7 +849,6 @@ ignore_sio_command_frame:
 									wav_last_duration = 0;
 								}
 							}
-							//}
 							cas_last_block_marker = true;
 							cas_fsk_bit = pwm_bit;
 							wav_last_count = 1;
@@ -936,11 +904,7 @@ ignore_sio_command_frame:
 					}
 					if(cas_block_index == cas_header.chunk_length && offset < cas_size && mounts[0].mounted) {
 						mutex_enter_blocking(&fs_lock);
-						//if(/* f_mount(&fatfs[0], (const char *)mounts[0].mount_path, 1) == FR_OK && */ f_open(&fil, (const char *)mounts[0].mount_path, FA_READ) == FR_OK) {
 						offset = cas_read_forward(offset);
-						//}
-						//f_close(&fil);
-						// f_mount(0, (const char *)mounts[0].mount_path, 1);
 						mutex_exit(&fs_lock);
 						mounts[0].status = offset;
 						if(!offset)

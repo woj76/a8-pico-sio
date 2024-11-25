@@ -12,6 +12,8 @@
  * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
  */
 
+ #include "config.h"
+
 #include "hardware/clocks.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
@@ -95,6 +97,7 @@ queue_t pio_queue;
 // 10*8 is not enough for Turbo D 9000, but going wild here costs memory, each item is 4 bytes
 // 16*8 also fails sometimes with the 1MHz base clock
 // The WAV decoding now seems to work with 64, but increasing it might be a good idea if some WAV file is not working
+// WAV files with 96000 sample rate also prefer this to be more than 64
 const int pio_queue_size = 96*8;
 
 uint32_t pio_e;
@@ -151,24 +154,29 @@ void flush_pio() {
 	blue_blinks = 0;
 	green_blinks = 0;
 	update_rgb_led(false);
-
 	//while(!queue_is_empty(&pio_queue))
 	//		tight_loop_contents();
-	// TODO needed?
-	//pio_sm_restart(cas_pio, sm);
-	//pio_sm_restart(cas_pio, sm_turbo);
 	//pio_interrupt_clear(cas_pio, 7);
 }
 
 static bool repeating_timer_motor(struct repeating_timer *t) {
-	static uint motor_off_delay = MOTOR_OFF_DELAY; // * MOTOR_CHECK_INTERVAL_MS
-	static uint motor_on_delay = MOTOR_ON_DELAY; // * MOTOR_CHECK_INTERVAL_MS
+#if MOTOR_OFF_DELAY > 0
+	static uint motor_off_delay = MOTOR_OFF_DELAY;
+#endif
+#if MOTOR_ON_DELAY > 0
+	static uint motor_on_delay = MOTOR_ON_DELAY;
+#endif
 	if(wav_sample_size) {
 		if(!cas_motor_on()) {
+#if MOTOR_ON_DELAY > 0
 			motor_on_delay = MOTOR_ON_DELAY;
+#endif
+#if MOTOR_OFF_DELAY > 0
 			if(motor_off_delay)
 				motor_off_delay--;
-			else {
+			else
+#endif
+			{
 				//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_irq_set(false, 7));
 				////sleep_ms(1);
 				//pio_sm_exec(cas_pio, cas_block_turbo ? sm_turbo : sm, pio_encode_wait_irq(0, false, 7));
@@ -178,10 +186,15 @@ static bool repeating_timer_motor(struct repeating_timer *t) {
 				update_rgb_led(false);
 			}
 		} else {
+#if MOTOR_OFF_DELAY > 0
 			motor_off_delay = MOTOR_OFF_DELAY;
+#endif
+#if MOTOR_ON_DELAY > 0
 			if(motor_on_delay)
 				motor_on_delay--;
-			else {
+			else
+#endif
+			{
 				//pio_interrupt_clear(cas_pio, 7);
 				pio_sm_set_enabled(cas_pio, cas_block_turbo ? sm_turbo : sm, true);
 				if(cas_block_turbo)
@@ -209,8 +222,12 @@ void pio_enqueue(uint8_t b, uint32_t d) {
 }
 
 void init_io() {
-	//timing_base_clock = clock_get_hz(clk_sys);
+
+#ifdef FULL_SPEED_PIO
+	timing_base_clock = clock_get_hz(clk_sys);
+#else
 	timing_base_clock = 1000000;
+#endif
 	// How much "silence" can the PIO produce in one step:
 	max_clock_ms = 0x7FFFFFFF/(timing_base_clock/1000)/1000*1000;
 
@@ -231,7 +248,6 @@ void init_io() {
 	queue_init(&pio_queue, sizeof(uint32_t), pio_queue_size);
 
 	pio_offset = pio_add_program(cas_pio, &pin_io_program);
-// 	float clk_divider = (float)clock_get_hz(clk_sys)/timing_base_clock;
  	int clk_divider = clock_get_hz(clk_sys)/timing_base_clock;
 
 	sm = pio_claim_unused_sm(cas_pio, true);
@@ -239,10 +255,6 @@ void init_io() {
 	pio_sm_set_consecutive_pindirs(cas_pio, sm, sio_tx_pin, 1, true);
 	pio_sm_config c = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-	//if(timing_base_clock != clock_get_hz(clk_sys))
-	//	sm_config_set_clkdiv(&c, clk_divider);
-	//else
-		// Make sure there are no weird round errors and this effectivelly being 0:254/255 instead
 	sm_config_set_clkdiv_int_frac(&c, clk_divider, 0);
 
 	sm_config_set_out_pins(&c, sio_tx_pin, 1);
@@ -254,13 +266,8 @@ void init_io() {
 
 	sm_config_turbo = pin_io_program_get_default_config(pio_offset);
 	sm_config_set_fifo_join(&sm_config_turbo, PIO_FIFO_JOIN_TX);
-//	if(timing_base_clock != clock_get_hz(clk_sys))
-//		sm_config_set_clkdiv(&sm_config_turbo, clk_divider);
-//	else
-//		sm_config_set_clkdiv_int_frac(&sm_config_turbo, 1, 0);
 
 	sm_config_set_clkdiv_int_frac(&sm_config_turbo, clk_divider, 0);
-
 
 	sm_config_set_out_shift(&sm_config_turbo, true, true, 32);
 

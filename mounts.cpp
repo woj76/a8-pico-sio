@@ -12,6 +12,8 @@
  * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
  */
 
+#include "config.h"
+
 #include <string.h>
 #include <stdio.h>
 

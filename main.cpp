@@ -1177,10 +1177,11 @@ void core1_entry() {
 
 int main() {
 
-	// Overclocking is required for WAV support on Pico 1
 #ifndef RASPBERRYPI_PICO2
-	// TODO try without overclock, measure complete read without overclock
+#ifdef WAV_96K
+	// Overclocking is required for 96K WAV support on Pico1
 	set_sys_clock_khz(250000, true);
+#endif
 #endif
 
 	// Core 1 can lockout this one when needed (for writing to the FLASH)
