@@ -21,16 +21,16 @@ What is **supported**:
 * Creation of empty or pre-formatted ATR images of standard sizes up to 360KB.
 * ATX mode selectable to be an "accurate" Atari 1050 or Atari 810 drive.
 * Tape turbo systems normally connected to the Atari through the different SIO lines (including the interrupt and proceed lines, like Turbo 6000 or Rambit) and the Joystick 2 port lines (K.S.O. Turbo 2000 or Turbo D). All turbo systems for images expressed as CAS files should be supported, including non-standard bit-rate ones, hybrid ones (normal SIO mode loader + turbo main payload), and multi-stage ones, but not all have been tested (well, all that have been thrown at me were). Similarly to Altirra, an option to invert the PWM signal for the "wrongly" produced turbo CAS files is included.
+* Loading of tape recordings stored in WAV files (only), with some limitations, see below.
 * Separate baud rates for PAL and NTSC host machines to match the serial speed as close as possible to the Pokey speed (to limit possible transmission errors).
-* Ultra Speed SIO with Pokey divisors (hex) 10, 6, 5, 4, 3, 2, 1, and 0 (always inactive for ATX images, this may change in future, but seems to me a bit pointless at the moment).
+* Ultra Speed SIO with Pokey divisors (hex) 10, 6, 5, 4, 3, 2, 1, and 0 (always inactive for ATX images, this may change in future, but seems to me a bit pointless to enable HSIO for ATX files at the moment).
 * Use of both cores on the Pico to enable fully concurrent operation of the Atari communication (SIO/tape playing) with the GUI and file selection with no user hold back.
 * Current configuration saving to FLASH and remembering the last selected directory on power down.
 
 What is **not (yet) supported**:
 
 * MAP files (there is always access to the GUI for selecting new images and the rotate buttons though, so I found it not necessary).
-* Tape recording (any support for this would need to be partial with considerable trade-offs, so a firm decision was made to skip this).
-*  WiFi / FujiNet protocols / loading of image files OTA. Something of this sort may actually be added in the future, but a bit more research is needed here on what it entails on the PicoW side.
+* WiFi / FujiNet protocols / loading of image files OTA. Something of this sort may actually be added in the future, but a bit more research is needed here on what it entails on the PicoW side.
 
 ## Hardware needed
 
@@ -122,7 +122,7 @@ Once on the main screen you can proceed to configure the options or mount the fi
 
 ### Options
 
-The options should be in most part self-explanatory, but the time they take effect might not be too obvious. The options themselves are changed immediately, as in you do not need to confirm them, when you exit the configuration screen, the new settings will be remembered until power down. When you exit through the `>> Save <<` item, the options are also saved permanently to the FLASH memory for the next power on. Note that this saving is not immediate when any SIO or tape transfers are on-going and happens only once the transfers "calm down".
+The options should be in most part self-explanatory, but the time they take effect might not be too obvious. The options themselves are changed immediately (=you do not need to confirm them), when you exit the configuration screen, the new settings will be remembered until power down. When you exit through the `>> Save <<` item, the options are also saved permanently to the FLASH memory for the next power on. Note that this saving is not immediate when any SIO or tape transfers are on-going and happens only once the transfers "calm down".
 
 The mount read-write option turns on the ability to write to the ATR or ATX files and becomes active on the next disk image mount or re-mount.
 
@@ -143,7 +143,9 @@ The Turbo data and activation pin condition options can be used to configure for
 * Data on SIO Interrupt, no special activation (motor line) for Turbo Rambit
 * Data on SIO Data In, activation on SIO Data Out for Turbo Blizzard
 
-However, the device will work with any combination of these as long as the Atari business end can deal with them. This option becomes active on the next CAS image file mount or re-mount/rewind. Note also that some turbo systems are sensitive to the PWM signal polarity more than others and depending on how the CAS file was produced the PWM Invert option might need to be turned on too.
+However, the device will work with any combination of these as long as the Atari business end can deal with them. This option becomes active on the next CAS image (or WAV where applicable) file mount or re-mount/rewind. Note also that some turbo systems are sensitive to the PWM signal polarity more than others and depending on how the CAS file was produced the PWM Invert option might need to be turned on too.
+
+The WAV file output specifies if the recording is for the regular FSK/SIO loading, or Turbo/PWM one. When it is PWM, the data and motor signals are directed to/from the pins specified by the other turbo options. This option is effective on the next tape image mount or rewind.
 
 ### Mounting and un/re-mounting
 
@@ -158,6 +160,10 @@ A single disk image file can be mounted in only one disk slot in read-write mode
 Rotation commands unmount all drive slots, move them up or down correspondingly, and remount the slots. This also means that the read-write status of multiply mounted single image is rotated accordingly.
 
 Finally, upon file selection for mounting a disk drive you can choose to create a new disk image in the current directory, either empty or pre-formatted for the most common Atari DOS-es (2.0/2.5, MyDOS, and SpartaDOSX), through a series of option picks.
+
+### WAV file support
+
+The support for loading programs recorded in WAV files has been also added, but it is somewhat limited. First of all, there are no guarantees that the WAV file can be correctly decoded, and there are no filtering or decoding parameters to play with from the user interface level (yet, you can decide to dig into the source code and try to modify things from there). Second, mixed FSK/PWM recordings are not supported, the complete single WAV file is directed either to the SIO RX pin for regular loading, or to the corresponding turbo/PWM pin for turbo loading. Which pins are used for turbo data transfer and motor activity detection is decided by the turbo options specified in the `Config` menu. Third, support for disk/tape interleaved transfers (for example, copying a multistage tape recording onto a disk image using a suitable DOS) has not been  tested at all and the code architecture for WAV decoding can stand in the way (but it may just as well work, it should for the CAS files). Fourth, WAV file decoding is computationally more intensive than simple reading of CAS files, and, for example, Pico 1 needs to be overclocked to keep up with decoding of FSK tape images sampled at 96kHz. Regardless of overclocking, the Pico might not be able to keep up with the WAV file decoding, for example, when the SD card is relatively slow. (The main reason is that the ratio of data to be read from the media to data transfer time is substantially larger than for CAS files or disk images).
 
 ### LED and Screen Indicators
 

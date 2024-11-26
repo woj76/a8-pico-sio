@@ -201,6 +201,9 @@ uint32_t wav_last_count;
 bool cas_last_block_marker;
 uint32_t wav_last_duration;
 uint8_t wav_last_duration_bit;
+int16_t wav_prev_sample;
+bool wav_filter1_started;
+bool wav_filter2_started;
 
 int16_t zcoeff1;
 int16_t zcoeff2;
@@ -228,6 +231,39 @@ static int32_t goertzal_int16(int16_t *x, int16_t zcoeff) {
 		zprev = z;
 	}
 	return (zprev2*zprev2 + zprev*zprev - ((zcoeff*zprev)>>14)*zprev2) >> 5;
+}
+
+int16_t filter1(int16_t s) {
+	int16_t rs;
+	static int16_t prs;
+	static int16_t ps;
+	if(!wav_filter1_started) {
+		rs = s;
+		ps = s;
+		prs = rs;
+	} else {
+		rs = prs*4/10 + (s-ps)*4/10;
+		ps = s;
+		prs = rs;
+	}
+	wav_filter1_started = true;
+	return rs;
+}
+
+int16_t filter2(int16_t s) {
+	int16_t rs;
+	static int16_t prs;
+	static int16_t ps;
+
+	if(!wav_filter2_started) {
+		rs = s;
+		prs = rs;
+	} else {
+		rs = s*1/12 + prs*11/12;
+		prs = rs;
+	}
+	wav_filter2_started = true;
+	return rs;
 }
 
 // Stepping average over the last 16 values
@@ -338,7 +374,7 @@ void main_sio_loop() {
 								wav_avg_sum = 0;
 								cas_size = mounts[i].status + wav_header.subchunk2_size;
 								// TODO depending on an option
-								cas_block_turbo = false;
+								cas_block_turbo = current_options[wav_option_index];
 								wav_sample_size = (wav_header.bits_per_sample == 16) ? 2 : 1;
 								wav_sample_div = (wav_header.sample_rate > 48000) ? 2 : 1;
 								wav_silence_threshold = wav_header.sample_rate / (wav_sample_div*20); // 32
@@ -347,16 +383,20 @@ void main_sio_loop() {
 								zcoeff1 = coeff1*(1<<14);
 								zcoeff2 = coeff2*(1<<14);
 
-								wav_filter_window_size = wav_header.sample_rate < 44100 ? 12 : 20*wav_sample_div;
-								// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
-								wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : (current_options[clock_option_index] ? 31960 : 31668);
+								wav_filter_window_size = cas_block_turbo ? 0 : (wav_header.sample_rate < 44100 ? 12 : 20*wav_sample_div);
+								if(cas_block_turbo) {
+									wav_prev_sample = 0;
+									wav_filter1_started = false;
+									wav_filter2_started = false;
+									wav_scaled_sample_rate = wav_header.sample_rate / wav_sample_div;
+								} else
+									// The ideal sampling frequency for PAL is 31668(.7), for NTSC 31960(.54)
+									wav_scaled_sample_rate = wav_header.sample_rate < 44100 ? wav_header.sample_rate : (current_options[clock_option_index] ? 31960 : 31668);
 								cas_sample_duration = (timing_base_clock+wav_scaled_sample_rate/2)/wav_scaled_sample_rate;
 								silence_duration = 500; // Extra .5s of silence at the beginning
-								// TODO can probably just use one of those
-								pwm_sample_duration = cas_sample_duration;
 								wav_last_silence = 0;
-								pwm_bit = 1;
-								cas_fsk_bit = 1;
+								pwm_bit = cas_block_turbo ? 0 : 1;
+								cas_fsk_bit = pwm_bit;
 								wav_last_count = 0;
 								wav_last_duration = 0;
 								wav_last_duration_bit = cas_fsk_bit;
@@ -817,29 +857,44 @@ ignore_sio_command_frame:
 						int16_t wav_last_sample = 0;
 						if(wav_sample_size == 2) {
 							int16_t *v = (int16_t *)&sector_buffer[offset+2*(wav_header.num_channels-1)];
-							g1 = goertzal_int16(v, zcoeff1);
-							g2 = goertzal_int16(v, zcoeff2);
+							if(!cas_block_turbo) {
+								g1 = goertzal_int16(v, zcoeff1);
+								g2 = goertzal_int16(v, zcoeff2);
+							}
 							wav_last_sample = *v;
 						}else{
 							int8_t *v = (int8_t *)&sector_buffer[offset+(wav_header.num_channels-1)];
-							g1 = goertzal_int8(v, zcoeff1);
-							g2 = goertzal_int8(v, zcoeff2);
+							if(!cas_block_turbo) {
+								g1 = goertzal_int8(v, zcoeff1);
+								g2 = goertzal_int8(v, zcoeff2);
+							}
 							wav_last_sample = *v * 256;
 						}
-						//if(wav_last_sample >= -1000 && wav_last_sample <= 1000)
-						if(wav_last_sample >= -3200 && wav_last_sample <= 3200)
-							wav_last_silence++;
-						else
-							wav_last_silence = 0;
+						if(cas_block_turbo) {
+							int16_t ns = 20*filter1(filter2(wav_last_sample));
+
+							if (pwm_bit)
+								pwm_bit = ns >= wav_prev_sample - 200;
+							else
+								pwm_bit = ns > wav_prev_sample + 200;
+							wav_prev_sample = ns;
+						} else {
+							//if(wav_last_sample >= -1000 && wav_last_sample <= 1000)
+							if(wav_last_sample >= -3200 && wav_last_sample <= 3200)
+								wav_last_silence++;
+							else
+								wav_last_silence = 0;
+							pwm_bit = (wav_last_silence > wav_silence_threshold) ? 1 : (filter_avg(g2-g1) > 0);
+						}
+
 						offset += wav_sample_div*wav_header.block_align;
-						pwm_bit = (wav_last_silence > wav_silence_threshold) ? 1 : (filter_avg(g2-g1) > 0);
 
 						if(pwm_bit == cas_fsk_bit)
 							wav_last_count++;
 						else {
 							uint32_t wav_scaled_bit_duration = wav_sample_div*wav_last_count*wav_scaled_sample_rate/wav_header.sample_rate;
 							// The first alternative filters stray signal flips in the long steady signal blocks
-							if((wav_last_duration < 1500 || wav_scaled_bit_duration > 10 || wav_last_duration_bit) && wav_scaled_bit_duration) {
+							if((cas_block_turbo || wav_last_duration < 1500 || wav_scaled_bit_duration > 10 || wav_last_duration_bit) && wav_scaled_bit_duration) {
 							//if(wav_scaled_bit_duration) {
 								pio_enqueue(cas_fsk_bit, wav_scaled_bit_duration*cas_sample_duration);
 								if(cas_fsk_bit == wav_last_duration_bit)

@@ -322,6 +322,7 @@ const std::string_view option_names[] = {
 	"Turbo Data:",
 	"Turbo When:",
 	"PWM Invert:",
+	"WAV Output:",
 	"   >> Save <<   "
 };
 
@@ -346,6 +347,8 @@ const char * const turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4
 const char * const turbo2_option_names_short[] = {" COMM", " J2P2", "  SIO", " NONE"};
 const char * const turbo2_option_names_long[] = {"SIO Command", "Joy2 Port Pin 2", "SIO Data Out", "None / Motor"};
 const char * const turbo3_option_names_long[] = {"Normal", "Inverted"};
+const char * const wav_option_names_short[] = {"  FSK", "  PWM"};
+const char * const wav_option_names_long[] = {"Regular FSK", "Turbo PWM"};
 
 const option_list option_lists[] = {
 	{
@@ -387,6 +390,11 @@ const option_list option_lists[] = {
 		.count = 2,
 		.short_names = mount_option_names_short,
 		.long_names = turbo3_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = wav_option_names_short,
+		.long_names = wav_option_names_long
 	}
 };
 
@@ -1028,7 +1036,7 @@ void select_option(int opt_num) {
 
 void update_options_entry(int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+(2+i)*10)*font_scale;
+	text_location.y = (2+(2+i)*9)*font_scale;
 	if(i == option_count)
 		text_location.y += 2*font_scale;
 	if(erase) {
