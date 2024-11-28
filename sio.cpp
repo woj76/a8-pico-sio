@@ -801,7 +801,8 @@ ignore_sio_command_frame:
 			update_rgb_led(false);
 			mutex_exit(&mount_lock);
 		} else if(mounts[0].mounted && (offset = mounts[0].status) && offset + wav_filter_window_size*wav_header.block_align < cas_size) {
-			if(wav_sample_size || cas_motor_on()) {
+			//if(wav_sample_size || cas_motor_on()) {
+			if(cas_motor_on()) {
 				if(wav_sample_size)
 					to_read = std::min((uint32_t)sector_buffer_size, cas_size - offset);
 				else
