@@ -126,7 +126,7 @@ The options should be in most part self-explanatory, but the time they take effe
 
 The mount read-write option turns on the ability to write to the ATR or ATX files and becomes active on the next disk image mount or re-mount.
 
-The PAL/NTSC options toggles between PAL or NTSC "friendly" baud rates keeping them as close as possible to what the Pokey expects on a particular system. This happens on the next SIO speed change (get speed command from the Atari or SIO high speed divisor setting change).
+The PAL/NTSC options toggles between PAL or NTSC "friendly" baud rates keeping them as close as possible to what the Pokey expects on a particular system. This happens on the next SIO speed change (get speed command from the Atari or SIO high speed divisor setting change), or the next WAV file mount (it applies to WAV file processing too).
 
 The high speed SIO option enables (when not selected to be 28) or disables (when 28) the Ultra Speed protocol, sets the divisor and changes the baud rate to stock, regardless of the divisor. This happens immediately, so if there are any on-going transfers they may get disturbed and the Atari should try to recover from that. Also, the Atari needs to issue the get speed SIO command to re-enable the high speed transfer.
 

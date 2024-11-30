@@ -51,6 +51,7 @@ https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findCom
 #include "file_load.hpp"
 #include "io.hpp"
 #include "options.hpp"
+#include "wav_decode.hpp"
 #include "sio.hpp"
 
 #include "font_atari_data.hpp"

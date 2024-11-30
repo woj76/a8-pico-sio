@@ -31,6 +31,7 @@ target_sources(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/file_load.cpp
     ${CMAKE_CURRENT_LIST_DIR}/io.cpp
     ${CMAKE_CURRENT_LIST_DIR}/options.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/wav_decode.cpp
     ${CMAKE_CURRENT_LIST_DIR}/sio.cpp
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp
     ${CMAKE_CURRENT_LIST_DIR}/usb_descriptors.c

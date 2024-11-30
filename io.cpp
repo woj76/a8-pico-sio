@@ -22,6 +22,7 @@
 #include "pico/util/queue.h"
 
 #include "io.hpp"
+#include "wav_decode.hpp"
 
 #include "options.hpp"
 #include "led_indicator.hpp"
