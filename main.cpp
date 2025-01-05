@@ -1249,12 +1249,12 @@ int main() {
 	// where there is no SD card reader and the display is connected
 	// to the SPI1 pins
 	if(!gpio_get(9) || !try_mount_sd())
-	//if(!try_mount_sd())
 		blue_blinks = 4;
 
-	if(!sd_card_present && curr_path[0] == '1')
+	if(curr_path[0] && f_opendir(&dir, curr_path) != FR_OK)
 		curr_path[0] = 0;
-		// strcpy(curr_path, volume_names[0]);
+	if(curr_path[0])
+		f_closedir(&dir);
 
 	multicore_launch_core1(core1_entry);
 
