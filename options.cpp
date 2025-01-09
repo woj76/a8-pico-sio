@@ -23,7 +23,17 @@
 #include "mounts.hpp"
 #include "flash_fs.h"
 
-uint8_t current_options[option_count] = {0};
+uint8_t current_options[option_count] = {
+	0, // disk write off
+	0, // PAL
+	0, // HSIO off
+	0, // 1050
+	3, // loader at $800
+	0, // SIO
+	0, // Command
+	0, // no invert
+	0 // FSK
+};
 
 volatile bool save_config_flag = false;
 volatile bool save_path_flag = false;

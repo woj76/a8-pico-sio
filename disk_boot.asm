@@ -30,6 +30,9 @@ buffer_ofs
 	.word $e477		;?!?!? Relevant when using CASINI only
 
 	lda #0 : sta runad : sta runad+1 : sta buffer+SECTOR_SIZE-1 : reloc02 = *-1 : sta buffer_ofs : reloc03 = *-1
+	ldy #$7F
+clear_zp_loop:
+	sta $80,y : dey : bpl clear_zp_loop
 	lda #$01 : sta buffer+SECTOR_SIZE-3 : reloc04 = *-1
 	lda #$71 : sta buffer+SECTOR_SIZE-2 : reloc05 = *-1
 
