@@ -4,6 +4,7 @@
 
 SECTOR_SIZE = 128 ; SD/ED
 
+coldst	=	$244
 runad	=	$2e0
 initad	=	$2e2
 dcomnd	=	$302
@@ -13,30 +14,42 @@ daux1	=	$30a
 daux2	=	$30b
 dskinv	=	$e453
 skctl	=	$d20f
+vcount	=	$d40b
 
+boot_flag = 	$09
 load_ptr =	$44
 load_end =	$46
 
 boot_start =	$700
 
-buffer	=	boot_start-$80
+buffer	=	$800
 
 	*=boot_start
 
 buffer_ofs
 
-	.byte 'F',2
-	.word buffer_ofs : reloc01 = *-1
-	.word $e477		;?!?!? Relevant when using CASINI only
+;	.byte 'F',2
+	.byte 0,2
+	.word boot_start : reloc01 = *-1
+;	.word $e477		;?!?!? Relevant when using CASINI only
+	.word boot_init : reloc24 = *-1
 
-	lda #0 : sta runad : sta runad+1 : sta buffer+SECTOR_SIZE-1 : reloc02 = *-1 : sta buffer_ofs : reloc03 = *-1
+boot_init
+	lda #0 : sta coldst
+	sta runad : sta runad+1
+	sta buffer+SECTOR_SIZE-1 : reloc02 = *-1
+	sta buffer_ofs : reloc03 = *-1
 	ldy #$7F
 clear_zp_loop:
 	sta $80,y : dey : bpl clear_zp_loop
 	lda #$01 : sta buffer+SECTOR_SIZE-3 : reloc04 = *-1
+	; sta boot_flag
 	lda #$71 : sta buffer+SECTOR_SIZE-2 : reloc05 = *-1
+	bne load_1_t
 
 load_1
+	lda vcount : cmp vcount : beq *-3 : cmp vcount : bne *-3
+load_1_t
 	jsr read : reloc06 = *-1 : bmi load_run : sta load_ptr
 	jsr read : reloc07 = *-1 : bmi load_run : sta load_ptr+1
 	cmp #$ff : bcs load_1
@@ -61,6 +74,7 @@ load_2
 	bcc load_2
 	lda #>(load_1-1) : reloc12 = *-1 : pha
 	lda #<(load_1-1) : pha
+	lda #$03 : sta skctl
 	jmp (initad)
 load_run
 	lda #$03 : sta skctl
@@ -99,5 +113,5 @@ success
 read_ret
 	rts
 
-all_end = buffer_ofs+$100
-	.dsb	(all_end-*),$00
+;all_end = boot_start+$100
+	.dsb	(buffer-*),$00
