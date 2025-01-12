@@ -45,11 +45,8 @@ clear_zp_loop:
 	lda #$01 : sta buffer+SECTOR_SIZE-3 : reloc04 = *-1
 	; sta boot_flag
 	lda #$71 : sta buffer+SECTOR_SIZE-2 : reloc05 = *-1
-	bne load_1_t
 
 load_1
-	lda vcount : cmp vcount : beq *-3 : cmp vcount : bne *-3
-load_1_t
 	jsr read : reloc06 = *-1 : bmi load_run : sta load_ptr
 	jsr read : reloc07 = *-1 : bmi load_run : sta load_ptr+1
 	cmp #$ff : bcs load_1
