@@ -77,7 +77,7 @@ constexpr std::string_view str_create_failed{"Create failed!"};
 
 constexpr std::string_view str_about1{"A8 Pico SIO"};
 constexpr std::string_view str_about2{"by woj@AtariAge"};
-constexpr std::string_view str_about3{"(c) 2024"};
+constexpr std::string_view str_about3{"(c) 2025"};
 constexpr std::string_view str_about4{"Inspired by and"};
 constexpr std::string_view str_about5{"based on code of"};
 constexpr std::string_view str_about6{"A8PicoCart"};
@@ -85,7 +85,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.90"};
+constexpr std::string_view str_about11{"Version 0.92"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
