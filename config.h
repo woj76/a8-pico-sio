@@ -43,3 +43,8 @@
 
 #define MOTOR_OFF_DELAY 0 // 500 ms
 #define MOTOR_ON_DELAY 0 // 500 ms
+
+// This changes colors for the device with at TFT screen that Zaxon of
+// atarionline.pl has built.
+
+//#define ZAXON_DEVICE

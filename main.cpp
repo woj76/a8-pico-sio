@@ -85,7 +85,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.92"};
+constexpr std::string_view str_about11{"Version 0.93"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
@@ -114,10 +114,41 @@ Button button_a(0), button_b(1), button_x(2), button_y(3);
 Button button_a(PicoDisplay2::A), button_b(PicoDisplay2::B), button_x(PicoDisplay2::X), button_y(PicoDisplay2::Y);
 #endif
 
+#ifdef ZAXON_DEVICE
+
+const Pen
+	BG=graphics.create_pen(0xFF, 0xFF, 0xFF), WHITE=graphics.create_pen(0x5B, 0x5B, 0x5B),
+	GREEN=graphics.create_pen(0xFF, 0xFF, 0xFF), RED=graphics.create_pen(0xFF, 0xFF, 0xFF);
+
+void update_colors() {
+	if(current_options[clock_option_index]) {
+		// NTSC
+		// Atari $94
+		graphics.update_pen(BG, 0xFF, 0xBD, 0x4F);
+		// Atari $9A
+		graphics.update_pen(WHITE, 0xA2, 0x53, 0x00);
+		// Atari $C8
+		graphics.update_pen(GREEN, 0xD7, 0x4A, 0xDF);
+		// Atari $34
+		graphics.update_pen(RED, 0x6C, 0xEC, 0xFD);
+	}else{
+		// PAL
+		// Atari $94
+		graphics.update_pen(BG, 0xFF, 0x99, 0x89);
+		// Atari $9A
+		graphics.update_pen(WHITE, 0xA7, 0x37, 0x27);
+		// Atari $C8
+		graphics.update_pen(GREEN, 0x9C, 0x50, 0xFF);
+		// Atari $24
+		graphics.update_pen(RED, 0x69, 0xD8, 0xE9);
+	}
+}
+
+#else
+
 const Pen
 	BG=graphics.create_pen(0x00, 0x00, 0x00), WHITE=graphics.create_pen(0xA4, 0xA4, 0xA4),
 	GREEN=graphics.create_pen(0x00, 0x00, 0x00), RED=graphics.create_pen(0x00, 0x00, 0x00);
-
 
 void update_colors() {
 	if(current_options[clock_option_index]) {
@@ -142,6 +173,8 @@ void update_colors() {
 		graphics.update_pen(RED, 0x96, 0x27, 0x16);
 	}
 }
+
+#endif
 
 void print_text(const std::string_view &t, int inverse=0) {
 	graphics.set_pen(WHITE);
