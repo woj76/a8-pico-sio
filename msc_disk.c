@@ -30,88 +30,130 @@
 
 #include "tusb.h"
 #include "fatfs_disk.h"
+#include "ff.h"
+#include "diskio.h"
 
-static bool ejected = false;
+#define MAX_LUN 2
+
+static bool ejected[MAX_LUN] =
+#if MAX_LUN == 1
+	{true};
+#else
+	{true, true};
+#endif
+
+static void try_disk_init(uint8_t lun) {
+	if(!(disk_initialize(lun) & (lun ? (STA_NOINIT | STA_NODISK): 0xFF)))
+		ejected[lun] = false;
+}
+
+void tud_mount_cb() {
+	if (!mount_fatfs_disk())
+		create_fatfs_disk();
+	for(uint8_t lun = 0; lun < MAX_LUN; lun++)
+		try_disk_init(lun);
+}
+
+void tud_umount_cb() {}
+
+uint8_t tud_msc_get_maxlun_cb(void) {
+	return MAX_LUN;
+}
 
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4]) {
-	(void) lun;
 
 	const char vid[] = "PicoSIO";
-	const char pid[] = "Mass Storage";
+	const char pid[] = "Mass Storage I";
 	const char rev[] = "1.0";
 
-	memcpy(vendor_id  , vid, strlen(vid));
-	memcpy(product_id , pid, strlen(pid));
+	int pid_len = strlen(pid);
+	memcpy(vendor_id, vid, strlen(vid));
+	memcpy(product_id, pid, pid_len);
+	if(lun)
+		product_id[pid_len-1] = 'E';
 	memcpy(product_rev, rev, strlen(rev));
 }
 
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
-	(void) lun;
-	if (ejected) {
+
+	if(disk_status(lun) & (STA_NOINIT | STA_NODISK))
+		return false;
+
+	if (ejected[lun]) {
 		tud_msc_set_sense(lun, SCSI_SENSE_NOT_READY, 0x3a, 0x00);
 		return false;
 	}
+
 	return true;
 }
 
 void tud_msc_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_size) {
-	(void) lun;
-	*block_count = SECTOR_NUM;
-	*block_size  = SECTOR_SIZE;
+	disk_ioctl(lun, GET_SECTOR_COUNT, block_count);
+	disk_ioctl(lun, GET_SECTOR_SIZE, block_size);
 }
 
 bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, bool load_eject) {
-	(void) lun;
 	(void) power_condition;
-	if ( load_eject ) {
-		if (start) {
-		} else {
-			ejected = true;
+	if (load_eject) {
+		if (start)
+			return !ejected[lun];
+		else {
+			if (disk_ioctl(lun, CTRL_SYNC, NULL) != RES_OK)
+				return false;
+			else
+				ejected[lun] = true;
 		}
-	}
+	} else if (!start && disk_ioctl(lun, CTRL_SYNC, NULL) != RES_OK)
+		return false;
 	return true;
 }
 
 int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
-	(void) lun;
 
-	if(offset != 0) return -1;
-	if(bufsize != SECTOR_SIZE) return -1;
+	if(offset)
+		return -1;
 
-	uint32_t status = fatfs_disk_read(buffer, lba, 1);
-	if(status != 0) return -1;
-	return (int32_t) bufsize;
+	uint16_t sec_size;
+	disk_ioctl(lun, GET_SECTOR_SIZE, &sec_size);
+	if(bufsize != sec_size)
+		return -1;
+
+	return disk_read(lun, buffer, lba, 1) == RES_OK ? (int32_t) bufsize : -1;
 }
 
 bool tud_msc_is_writable_cb (uint8_t lun) {
-	(void) lun;
-	return true;
+	return lun ? !(disk_status(lun) & STA_PROTECT) : true;
 }
 
 alarm_id_t alarm_id = -1;
 
 int64_t sync_callback(alarm_id_t id, void *user_data) {
-	fatfs_disk_sync();
+	for(uint8_t lun = 0; lun < MAX_LUN; lun++)
+		// For lun == 1 this seems to be a no-op
+		disk_ioctl(lun, CTRL_SYNC, NULL);
 }
 
 int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
-	(void) lun;
 
-	if(offset != 0) return -1;
-	if(bufsize != SECTOR_SIZE) return -1;
+	if(offset)
+		return -1;
 
-	uint32_t status = fatfs_disk_write(buffer, lba, 1);
+	uint16_t sec_size;
+	disk_ioctl(lun, GET_SECTOR_SIZE, &sec_size);
+	if(bufsize != sec_size)
+		return -1;
+
+	DSTATUS status = disk_write(lun, buffer, lba, 1);
 
 	if(alarm_id >= 0)
 		cancel_alarm(alarm_id);
 	alarm_id = add_alarm_in_ms(250, sync_callback, NULL, false);
 
-	if(status != 0) return -1;
-	return (int32_t) bufsize;
+	return status == RES_OK ? (int32_t) bufsize : -1;
 }
 
 int32_t tud_msc_scsi_cb (uint8_t lun, uint8_t const scsi_cmd[16], void* buffer, uint16_t bufsize) {
-
+/*
 	void const* response = NULL;
 	int32_t resplen = 0;
 
@@ -128,11 +170,12 @@ int32_t tud_msc_scsi_cb (uint8_t lun, uint8_t const scsi_cmd[16], void* buffer, 
 		resplen = bufsize;
 
 	if ( response && (resplen > 0) ) {
-		if(in_xfer) {
+		if(in_xfer)
 			memcpy(buffer, response, (size_t) resplen);
-		} else {
-		}
 	}
 
 	return (int32_t) resplen;
+*/
+	tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);
+	return -1;
 }

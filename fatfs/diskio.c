@@ -145,6 +145,9 @@ DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void *buff) {
 						return RES_ERROR;
 					return RES_OK;
 				}
+				case GET_SECTOR_SIZE:
+					*(WORD*) buff = SECTOR_SIZE;
+					return RES_OK;
 				case GET_BLOCK_SIZE: {
 					static DWORD bs = 1;
 					*(DWORD *)buff = bs;

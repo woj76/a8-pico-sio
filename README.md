@@ -14,7 +14,7 @@ This project is an Atari SIO drive emulator implemented on a Raspberry Pi Pico, 
 
 What is **supported**:
 
-* Loading of disk and tape image files from the Pico's internal FLASH (functioning as a USB drive when connected to a PC) or/and (at the same time) external SD card, with SD card hot-swapping.
+* Loading of disk and tape image files from the Pico's internal FLASH (functioning as a USB drive when connected to a PC) or/and (at the same time) external SD card (also accessible from the PC, see notes below), with SD card hot-swapping.
 * Four emulated disk drives D1: to D4: with buttons to quickly rotate them in either direction and one C: device.
 * Image files: ATR - read and write (incl. formatting provided the size is a standard floppy one), ATX - read and limited write (only ATX existing sectors), no formatting, CAS - read of all CAS chunk types.
 * XEX file loading, read-only through a virtual disk image with relocatable (from `$500` up to `$A00`) boot loader.
@@ -113,7 +113,9 @@ _`board`_ being for example **`pico`** (the default), **`pico2`**, or **`pimoron
 
 ## (Sort of a) User Manual
 
-When everything is wired up properly and you connect the Pico to USB power you should see the display come up and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive) or resetting the saved settings to defaults. The settings are stored "secretly" in the FLASH area, not in any file on the internal FLASH USB drive, so you cannot modify the settings manually or remove the file, if you wonder.
+When everything is wired up properly and you connect the Pico to USB power you should see the display come up and the information that you can press A or B buttons during boot to, respectively, go into the USB drive mode (for copying the files from the PC to the internal FLASH drive or the SD card) or resetting the saved settings to defaults. The settings are stored "secretly" in the FLASH area, not in any file on the internal FLASH USB drive, so you cannot modify the settings manually or remove the file, if you wonder.
+
+When you choose the USB drive option, both the internal FLASH drive and the SD card (if plugged in during the device initialization, in this case SD card hot-swapping is NOT supported) should appear as mounted drives on your PC. Note that the support for accessing the SD card is fully functioning (so the device operates as an SD card reader), but it is very very slow - I got speeds of around 300KB/s when reading data off the SD card, this sums up to over 2 hours for 3GB of data, not really impressive. To save yourself the pain I suggest using a separate high-speed SD card reader. Finally, the SD card to PC interface has been only moderately tested, and only on Linux, so treat this particular functionality as experimental.
 
 When you do not choose the USB drive option, after a couple of seconds and a slider passing through the screen, the device shall boot into the main screen, now with the familiar Atari blue color. You should also see the color LED on the display blinking twice, in blue if there is no SD card detected (internal FLASH drive only), or in green if there is a recognizable SD card connected.
 

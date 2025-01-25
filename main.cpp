@@ -9,7 +9,7 @@
  * source files and the README file. This file is licensed under GNU General
  * Public License 3.0 or later.
  *
- * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
+ * Copyright (C) 2025 Wojciech Mostowski <wojciech.mostowski@gmail.com>
  */
 
 /*
@@ -85,7 +85,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.93"};
+constexpr std::string_view str_about11{"Version 0.94"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
@@ -1440,18 +1440,11 @@ int main() {
 	return 0;
 }
 
-void tud_mount_cb(void) {
-	if (!mount_fatfs_disk())
-		create_fatfs_disk();
-}
-
-void tud_umount_cb(void) {}
-
 void tud_suspend_cb(bool remote_wakeup_en) {
 	// (void) remote_wakeup_en;
 }
 
-void tud_resume_cb(void) {}
+void tud_resume_cb() {}
 
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts) {
 	//(void) itf;

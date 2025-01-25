@@ -64,7 +64,7 @@ void create_fatfs_disk() {
 	f_mount(&fs, "0:", 0);
 	f_setlabel("A8-Pico-SIO");
 	res = f_open(&fil, "INFO.TXT", FA_CREATE_NEW | FA_WRITE);
-	f_puts("Atari 8-bit Pico SIO USB device\r\n(c) 2024 woj@AtariAge, USB device inspired and based on A8PicoCart code by Electrotrains (c) 2023\r\nDrag your ATR, ATX, XEX, CAS, or WAV files in here!\r\n", &fil);
+	f_puts("Atari 8-bit Pico SIO USB device\r\n(c) 2025 woj@AtariAge, USB device inspired and based on A8PicoCart code by Electrotrains (c) 2023\r\nDrag your ATR, ATX, XEX, CAS, or WAV files in here!\r\n", &fil);
 	f_close(&fil);
 	f_mount(0, "0:", 0);
 }

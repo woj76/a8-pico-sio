@@ -9,7 +9,7 @@
  * source files and the README file. This file is licensed under GNU General
  * Public License 3.0 or later.
  *
- * Copyright (C) 2024 Wojciech Mostowski <wojciech.mostowski@gmail.com>
+ * Copyright (C) 2025 Wojciech Mostowski <wojciech.mostowski@gmail.com>
  */
 
  #include "config.h"
