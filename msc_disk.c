@@ -76,7 +76,7 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
 
-	if(disk_status(lun) & (STA_NOINIT | STA_NODISK))
+	if(disk_status(lun) & STA_NOINIT)
 		return false;
 
 	if (ejected[lun]) {
