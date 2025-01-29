@@ -179,6 +179,7 @@ specific language governing permissions and limitations under the License.
 
 #include "pico/mutex.h"
 
+#include "config.h"
 #include "sd_card.h"
 #include "sd_spi.h"
 #include "ff.h" /* Obtains integer types */
@@ -1182,7 +1183,7 @@ static sd_card_t sd_cards[] = {  // One for each SD card
         .ss_gpio = 13,    // The SPI slave select GPIO for this SD card
         .use_card_detect = true,
         .card_detect_gpio = 9,   // Card detect
-        .card_detected_true = 1  // What the GPIO read returns when a card is
+        .card_detected_true = SD_DETECTED_GPIO_STATE  // What the GPIO read returns when a card is
                                  // present. Use -1 if there is no card detect.
     }
 };

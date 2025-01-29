@@ -46,6 +46,7 @@ https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findCom
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "drivers/button/button.hpp"
 
+#include "sd_card.h"
 #include "led_indicator.hpp"
 #include "mounts.hpp"
 #include "file_load.hpp"
@@ -85,7 +86,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.94"};
+constexpr std::string_view str_about11{"Version 0.95"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
@@ -760,18 +761,14 @@ void get_file(int file_entry_index) {
 				r = -1;
 			mutex_exit(&fs_lock);
 		}
-		if(r >= 0) {
+		if(r >= 0)
 			r = read_directory(-1, 0);
-			if(r < 0 && curr_path[0]) {
-				f_closedir(&dir);
-				//if(sd_card_present)
-				curr_path[0] = 0;
-				cursor_position = 0;
-				//else
-				//	strcpy(curr_path, volume_names[0]);
-				last_file_name[0] = 0;
-				r = read_directory(-1, 0);
-			}
+		else if(curr_path[0]) {
+			f_closedir(&dir);
+			curr_path[0] = 0;
+			cursor_position = 0;
+			last_file_name[0] = 0;
+			r = read_directory(-1, 0);
 		}
 		cancel_repeating_timer(&loading_pg_timer);
 		graphics.set_pen(BG); graphics.clear();
@@ -1274,14 +1271,16 @@ int main() {
 
 	// This is initialized in SD card code, but we need it earlier just in case
 	// there is no sign of the SD card or even the reader
-	gpio_init(9); gpio_set_dir(9, GPIO_IN);
-	//gpio_pull_up(9); // Pulled up in hardware
+	sd_card_t *p_sd = sd_get_by_num(1);
+	uint sd_detect_gpio = p_sd->card_detect_gpio;
+	gpio_init(sd_detect_gpio); gpio_set_dir(sd_detect_gpio, GPIO_IN);
+	//gpio_pull_up(sd_detect_gpio); // Pulled up in hardware
 
 	// It is vital to check the card presence pin first and not to attempt
 	// mounting if the card is not there. This is important for the setup
 	// where there is no SD card reader and the display is connected
 	// to the SPI1 pins
-	if(!gpio_get(9) || !try_mount_sd())
+	if(gpio_get(sd_detect_gpio) != p_sd->card_detected_true || !try_mount_sd())
 		blue_blinks = 4;
 
 	if(curr_path[0] && f_opendir(&dir, curr_path) != FR_OK)

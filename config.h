@@ -48,3 +48,8 @@
 // atarionline.pl has built.
 
 //#define ZAXON_DEVICE
+
+// The card detection GPIO pin (9) state when the card is present, depending on
+// the sd card reader type and/or device circuitry might need to be 0.
+
+#define SD_DETECTED_GPIO_STATE 1

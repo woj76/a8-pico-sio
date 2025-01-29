@@ -193,8 +193,9 @@ void main_sio_loop() {
 	int i;
 	uint bytes_read;
 	absolute_time_t last_sd_check = get_absolute_time();
+	sd_card_t *p_sd = sd_get_by_num(1);
 	while(true) {
-		uint8_t cd_temp = gpio_get(9);
+		uint8_t cd_temp = (gpio_get(p_sd->card_detect_gpio) == p_sd->card_detected_true);
 		// Debounce 500ms - can it be smaller?
 		if(cd_temp != sd_card_present && absolute_time_diff_us(last_sd_check, get_absolute_time()) > 500000) {
 			last_sd_check = get_absolute_time();
@@ -209,7 +210,7 @@ void main_sio_loop() {
 				//sd_card_t *p_sd = sd_get_by_num(1);
 				//p_sd->sd_test_com(p_sd);
 				// This one is enough and way quicker, we know by now that the card is gone
-				sd_get_by_num(1)->m_Status |= STA_NOINIT;
+				p_sd->m_Status |= STA_NOINIT;
 			}
 			cd_temp = sd_card_present ^ 1;
 			mutex_exit(&mount_lock);
