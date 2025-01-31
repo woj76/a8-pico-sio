@@ -4,6 +4,8 @@
 
 SECTOR_SIZE = 128 ; SD/ED
 
+#define BASIC_CHECK
+
 coldst	=	$244
 runad	=	$2e0
 initad	=	$2e2
@@ -29,12 +31,16 @@ buffer	=	$800
 buffer_ofs
 
 ;	.byte 'F',2
-	.byte 0,2
+	.byte 0,boot_blocks+1 ; Note! this does not work when the loader size
+				; divided evenly over 128 blocks
 	.word boot_start : reloc01 = *-1
 ;	.word $e477		;?!?!? Relevant when using CASINI only
 	.word boot_init : reloc24 = *-1
 
 boot_init
+#ifdef BASIC_CHECK
+	jsr basic_check : reloc25 = *-1
+#endif
 	lda #0 : sta coldst
 	sta runad : sta runad+1
 	sta buffer+SECTOR_SIZE-1 : reloc02 = *-1
@@ -110,5 +116,34 @@ success
 read_ret
 	rts
 
-;all_end = boot_start+$100
-	.dsb	(buffer-*),$00
+#ifdef BASIC_CHECK
+ramtop = $6a
+ramsiz = $2e4
+portb = $d301
+basicf = $3f8
+edev_vecs = $e400
+
+basic_check
+	lda #$C0
+	cmp ramtop
+	beq basic_check_ret
+	sta ramtop : sta ramsiz
+	lda portb : ora #$02 : sta portb
+	lda #1 : sta basicf
+	ldx #2
+	jsr editor : reloc26 = *-1
+	ldx #0
+editor
+	lda edev_vecs+1,x
+	pha
+	lda edev_vecs,x
+	pha
+basic_check_ret
+	rts
+#endif
+boot_end
+
+boot_len = boot_end - boot_start
+boot_blocks = boot_len / 128
+
+	.dsb	((boot_blocks+1)*128 - boot_len),$00

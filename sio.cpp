@@ -104,8 +104,9 @@ static bool try_get_sio_command() {
 
 	// Assumption - when casette motor is on the active command line
 	// is much more likely due to turbo activation and cassette transfer
-	// should not be interrupted
-	if(gpio_get(command_line_pin) || gpio_get(normal_motor_pin) == MOTOR_ON_STATE)
+	// should not be interrupted. But only when there is a casette mount
+	// and the selected turbo system does make use of the command line pin.
+	if(gpio_get(command_line_pin) || (mounts[0].mounted && !current_options[turbo2_option_index] && gpio_get(normal_motor_pin) == MOTOR_ON_STATE))
 		return false;
 
 	memset(&sio_command, 0x01, 5);
@@ -460,13 +461,15 @@ void main_sio_loop() {
 										disk_headers[drive_number-1].atr_header.temp2 = 0xFF;
 									to_read = 128;
 							} else {
-								if(sio_command.sector_number <= 2) {
+								if(sio_command.sector_number <= xex_loader_len / 128) {
 									offset = 128*(sio_command.sector_number-1);
 									memcpy(sector_buffer, &boot_loader[offset], 128);
 									if(boot_reloc_delta[current_options[xex_option_index]])
 										for(i=0; i<boot_reloc_locs_size; i++)
 											if(boot_reloc_locs[i] >= offset && boot_reloc_locs[i] < offset + 128)
 												sector_buffer[boot_reloc_locs[i]-offset] += boot_reloc_delta[current_options[xex_option_index]];
+									if(!current_options[basic_option_index] && !offset)
+										memset(&sector_buffer[6], 0xEA, 3);
 								} else {
 									if(sio_command.sector_number == 0x168) { // VTOC
 										uint total_sectors = mounts[drive_number].status >> 7;
@@ -494,9 +497,8 @@ void main_sio_loop() {
 											if(c == '.')
 												i = 7;
 											else {
-												// 'a'-1 or > 'z' -> '@'
-												// To uppercase: 'a'..'z' -> -32 Needed?
-												if(c == 'a'-1 || c > 'z') c = '@';
+												if(c >= 'a' && c <= 'z') c -= 32;
+												else if(c < 'A' || c > 'Z') c = '@';
 												sector_buffer[5+i] = c;
 											}
 											offset++;

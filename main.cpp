@@ -86,7 +86,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.95"};
+constexpr std::string_view str_about11{"Version 0.96"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
@@ -354,6 +354,7 @@ const std::string_view option_names[] = {
 	"HSIO Speed:",
 	"ATX Floppy:",
 	"XEX Loader:",
+	"Boot Basic:",
 	"Turbo Data:",
 	"Turbo When:",
 	"PWM Invert:",
@@ -377,6 +378,8 @@ const char * const atx_option_names_short[] = {" 1050", "  810"};
 const char * const atx_option_names_long[] = {"Atari 1050", "Atari 810"};
 const char * const xex_option_names_short[] = {" $500", " $600", " $700", " $800", " $900", " $A00"};
 const char * const xex_option_names_long[] = {"Loader at $500", "Loader at $600", "Loader at $700", "Loader at $800", "Loader at $900", "Loader at $A00"};
+const char * const basic_option_names_short[] = {"  OPT", "  OFF"};
+const char * const basic_option_names_long[] = {"Default (OPTION)", "Disabled"};
 const char * const turbo1_option_names_short[] = {"  SIO", " J2P4", " PROC", "  INT", " J2P1"};
 const char * const turbo1_option_names_long[] = {"SIO Data In", "Joy2 Port Pin 4", "SIO Proceed", "SIO Interrupt", "Joy2 Port Pin 1"};
 const char * const turbo2_option_names_short[] = {" COMM", " J2P2", "  SIO", " NONE"};
@@ -410,6 +413,11 @@ const option_list option_lists[] = {
 		.count = 6,
 		.short_names = xex_option_names_short,
 		.long_names = xex_option_names_long
+	},
+	{
+		.count = 2,
+		.short_names = basic_option_names_short,
+		.long_names = basic_option_names_long
 	},
 	{
 		.count = 5,
@@ -1067,7 +1075,7 @@ void select_option(int opt_num) {
 
 void update_options_entry(int i, bool erase) {
 	text_location.x = 2*8*font_scale;
-	text_location.y = (2+(2+i)*9)*font_scale;
+	text_location.y = (16+i*9)*font_scale;
 	if(i == option_count)
 		text_location.y += 2*font_scale;
 	if(erase) {
@@ -1109,9 +1117,6 @@ restart_options:
 	text_location.x = str_x(str_config2.size());
 	text_location.y = 4*font_scale;
 	print_text(str_config2);
-	Rect r(text_location.x,text_location.y+10*font_scale,str_config2.size()*8*font_scale,2*font_scale);
-	graphics.set_pen(WHITE); graphics.rectangle(r);
-
 	main_buttons[0].str = &char_left;
 	update_buttons(main_buttons, main_buttons_size);
 

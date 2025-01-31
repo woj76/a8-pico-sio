@@ -137,6 +137,8 @@ The ATX drive model option changes the emulation timing to mimic the 1050 or the
 
 The XEX loader option relocates the virtual disk boot loader to the specified address, this is effective on the very next read of any boot sectors of drives hosting XEX files.
 
+The boot Basic option allows to you to disable Basic during XEX loading (OFF/Disabled), otherwise you should hold OPTION yourself when booting XEX files that require Basic to be turned off.
+
 The Turbo data and activation pin condition options can be used to configure for the particular turbo emulation setup. For the typically known turbo systems use the following:
 
 * Data on SIO Data In, activation on SIO Command for Turbo 2000(F)/2001

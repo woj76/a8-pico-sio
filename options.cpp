@@ -29,6 +29,7 @@ uint8_t current_options[option_count] = {
 	0, // HSIO off
 	0, // 1050
 	2, // loader at $700
+	0, // basic default
 	0, // SIO
 	0, // Command
 	0, // no invert

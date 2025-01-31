@@ -17,7 +17,7 @@
 #include <stdint.h>
 #include "config.h"
 
-#define option_count 9
+#define option_count 10
 
 extern uint8_t current_options[];
 
@@ -26,10 +26,11 @@ extern uint8_t current_options[];
 #define hsio_option_index 2
 #define atx_option_index 3
 #define xex_option_index 4
-#define turbo1_option_index 5
-#define turbo2_option_index 6
-#define turbo3_option_index 7
-#define wav_option_index 8
+#define basic_option_index 5
+#define turbo1_option_index 6
+#define turbo2_option_index 7
+#define turbo3_option_index 8
+#define wav_option_index 9
 
 extern const uint8_t *flash_config_pointer;
 extern volatile bool save_config_flag;
