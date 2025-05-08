@@ -42,7 +42,6 @@ boot_init
 	jsr basic_check : reloc25 = *-1
 #endif
 	lda #0 : sta coldst
-	sta runad : sta runad+1
 	sta buffer+SECTOR_SIZE-1 : reloc02 = *-1
 	sta buffer_ofs : reloc03 = *-1
 	ldy #$7F
@@ -55,10 +54,11 @@ clear_zp_loop:
 load_1
 	jsr read : reloc06 = *-1 : bmi load_run : sta load_ptr
 	jsr read : reloc07 = *-1 : bmi load_run : sta load_ptr+1
-	cmp #$ff : bcs load_1
+	and load_ptr : cmp #$ff : beq load_1
 	jsr read : reloc08 = *-1 : bmi load_run : sta load_end
 	jsr read : reloc09 = *-1 : bmi load_run : sta load_end+1
-	lda runad : ora runad+1 : bne load_1_1
+	lda #0 : runad_ready = *-1 : bne load_1_1
+	inc runad_ready : reloc27 = *-1
 	lda load_ptr : sta runad : lda load_ptr+1 : sta runad+1
 load_1_1
 	lda #<read_ret : sta initad

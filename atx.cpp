@@ -337,10 +337,10 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 				r = -1;
 				tgtSectorOffset = 0;
 			} else if(op_verify) {
-				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, 256) != FR_OK) {
+				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, si) != FR_OK) {
 					tgtSectorOffset = 0;
 					r = -1;
-				}else if(memcmp(sector_buffer, &sector_buffer[256], atx_sector_size))
+				}else if(memcmp(sector_buffer, &sector_buffer[si], atx_sector_size))
 					tgtSectorOffset = 0;
 			}
 
