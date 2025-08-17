@@ -164,7 +164,10 @@ static uint8_t check_drive_and_sector_status(int drive_number, FSIZE_t *offset, 
 		*to_read = 128;
 	} else {
 		*to_read = disk_headers[drive_number-1].atr_header.sec_size;
-		*offset = 384+(*offset-3)*(*to_read);
+		if(*to_read == 256)
+			*offset = 384+(*offset-3)*(*to_read);
+		else
+			*offset = (*offset)*(*to_read);
 	}
 	if(sio_command.sector_number == 0 || *offset + *to_read > mounts[drive_number].status) {
 		disk_headers[drive_number-1].atr_header.temp2 &= 0xEF;
@@ -410,7 +413,10 @@ void main_sio_loop() {
 						offset = disk_headers[i-1].atr_header.sec_size;
 						sector_buffer[6] = (offset >> 8) & 0xFF; // bytes / sec high
 						sector_buffer[7] = offset & 0xFF; // bytes / sec low
-						offset = 3+(mounts[i].status-384)/offset;
+						if(offset == 256)
+							offset = 3+(mounts[i].status-384) / offset;
+						else
+							offset = mounts[i].status / offset;
 						sector_buffer[2] = (offset >> 8) & 0xFF; // # sectors high
 						sector_buffer[3] = (offset & 0xFF); // # sectors low
 						sector_buffer[4] = 0; // # sides

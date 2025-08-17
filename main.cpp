@@ -86,7 +86,7 @@ constexpr std::string_view str_about7{"SIO2BSD"};
 constexpr std::string_view str_about8{"SDrive-MAX"};
 constexpr std::string_view str_about9{"Altirra"};
 constexpr std::string_view str_about10{"EclaireXL"};
-constexpr std::string_view str_about11{"Version 0.97"};
+constexpr std::string_view str_about11{"Version 0.98"};
 
 constexpr std::string_view char_empty{" "};
 constexpr std::string_view char_up{"!"};
