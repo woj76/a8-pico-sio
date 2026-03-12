@@ -713,7 +713,7 @@ ignore_sio_command_frame:
 				offset += to_read;
 				mounts[0].status = offset - wav_filter_window_size*wav_header.block_align;
 				gpio_set_function(sio_tx_pin, GPIO_FUNC_PIOX);
-				uint8_t silence_bit = (cas_block_turbo ? 0 : 1);
+				uint8_t silence_bit = (cas_block_turbo ? pwm_bit : 1);
 				while(silence_duration > 0) {
 					uint16_t silence_block_len = silence_duration;
 					if(silence_block_len >= max_clock_ms)
@@ -844,14 +844,18 @@ ignore_sio_command_frame:
 								break;
 						}
 					}
-					if(cas_block_index == cas_header.chunk_length && offset < cas_size && mounts[0].mounted) {
+					if(offset == cas_size) {
+						pio_enqueue(cas_block_turbo ? pwm_bit : 1, 16);
+					}
+					else if(cas_block_index == cas_header.chunk_length && offset < cas_size && mounts[0].mounted) {
 						mutex_enter_blocking(&fs_lock);
 						offset = cas_read_forward(offset);
 						mutex_exit(&fs_lock);
 						mounts[0].status = offset;
 						if(!offset)
 							set_last_access_error(0);
-						else if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || (cas_header.signature == cas_header_fsk && silence_duration) || dma_block_turbo^cas_block_turbo) {
+						else if(cas_header.signature == cas_header_pwmc || cas_header.signature == cas_header_data || silence_duration || dma_block_turbo^cas_block_turbo) {
+							pio_enqueue(dma_block_turbo ? pwm_bit : 1, 16);
 							while(!pio_sm_is_tx_fifo_empty(cas_pio, dma_block_turbo ? sm_turbo : sm))
 								tight_loop_contents();
 							// This is to account for the possible motor off switching lag
