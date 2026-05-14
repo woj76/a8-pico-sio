@@ -265,13 +265,16 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 	uint32_t retryOffset = currentFileOffset;
 	uint8_t write_status;
 	uint16_t ext_sector_size;
+	uint32_t oneGermanATXOffset; // ;)
+
 	while (retries > 0) {
 		retries--;
 		currentFileOffset = retryOffset;
-		int pTT;
+		int pTT = 0;
 		uint16_t tgtSectorIndex = 0; // the index of the target sector within the sector list
 		tgtSectorOffset = 0;
 		writeStatusOffset = 0;
+		oneGermanATXOffset = 0;
 		weakOffset = -1;
 		write_status = mask_fdc_missing;
 		// iterate through all sector headers to find the target sector
@@ -281,6 +284,8 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 			if(mounted_file_transfer(atx_drive_number+1, currentFileOffset, sectorCount*sizeof(atxSectorHeader), false, si) == FR_OK) {
 				for (i=0; i < sectorCount; i++) {
 					sectorHeader = (atxSectorHeader *)&sector_buffer[si+i*sizeof(atxSectorHeader)];
+					if (op_write && tgtTrackNumber == 38 && sectorHeader->number == 23 && tgtSectorNumber == 25 && sectorHeader->timev == 12066)
+						oneGermanATXOffset = sectorHeader->data;
 					// if the sector is not flagged as missing and its number matches the one we're looking for...
 					if (sectorHeader->number == tgtSectorNumber) {
 						if(sectorHeader->status & mask_fdc_missing) {
@@ -296,6 +301,8 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 							writeStatusOffset = currentFileOffset + 1;
 							tgtSectorIndex = i;
 							tgtSectorOffset = sectorHeader->data;
+							if (oneGermanATXOffset && tgtTrackNumber == 38 && tgtSectorNumber == 25 && sectorHeader->timev != 12355)
+								oneGermanATXOffset = 0;
 						}
 					}
 					currentFileOffset += sizeof(atxSectorHeader);
@@ -336,12 +343,18 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 			if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, op_write, 0) != FR_OK) {
 				r = -1;
 				tgtSectorOffset = 0;
-			} else if(op_verify) {
-				if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, si) != FR_OK) {
-					tgtSectorOffset = 0;
+			} else {
+				if(oneGermanATXOffset && mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + oneGermanATXOffset + 36, atx_sector_size - 36, true, 0) != FR_OK) {
 					r = -1;
-				}else if(memcmp(sector_buffer, &sector_buffer[si], atx_sector_size))
 					tgtSectorOffset = 0;
+				}
+				if(tgtSectorOffset && op_verify) {
+					if(mounted_file_transfer(atx_drive_number+1, gTrackInfo[atx_drive_number][tgtTrackNumber] + tgtSectorOffset, atx_sector_size, false, si) != FR_OK) {
+						tgtSectorOffset = 0;
+						r = -1;
+					}else if(memcmp(sector_buffer, &sector_buffer[si], atx_sector_size))
+						tgtSectorOffset = 0;
+			}
 			}
 
 			// This calculation is an educated guess based on all the different ATX implementations
@@ -377,10 +390,12 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 	*status &= ~(mask_reserved | mask_extended_data);
 
 	if(op_write) {
-		if(tgtSectorOffset)
-			*status &= ~(mask_fdc_crc | mask_fdc_record_type);
-		else
-			*status = write_status & ~(mask_reserved | mask_extended_data);
+		if(weakOffset == -1) {
+			if(tgtSectorOffset)
+				*status &= ~(mask_fdc_crc | mask_fdc_record_type);
+			else
+				*status = write_status & ~(mask_reserved | mask_extended_data);
+		}
 	} else {
 		if (*status & mask_fdc_dlost) {
 			if(is1050)
@@ -406,7 +421,7 @@ int8_t transferAtxSector(int atx_drive_number, uint16_t num, uint8_t *status, bo
 		// This is probably equivalent in this case, some testing still needs to be done
 		// to see which one works better for both the internal Flash and SD cards.
 		//sleep_us(is1050 ? us_cs_calculation_1050 : us_cs_calculation_810);
-	}else if(tgtSectorOffset) {
+	}else if(tgtSectorOffset && weakOffset == -1) {
 		if(writeStatusOffset) {
 			sector_buffer[si] = *status;
 			if(mounted_file_transfer(atx_drive_number+1, writeStatusOffset, 1, true, si) != FR_OK) {
