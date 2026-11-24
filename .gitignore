@@ -1,3 +1,4 @@
 build/
 disk_boot.bin
 disk_boot.txt
+.DS_Store

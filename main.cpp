@@ -40,9 +40,17 @@ https://forums.atariage.com/topic/282759-databyte-disks-on-atari-810/?do=findCom
 #include "tusb.h"
 #include "fatfs_disk.h"
 #include "ff.h"
+#include "color_scheme.h"
 
 #include "libraries/pico_display_2/pico_display_2.hpp"
+#ifdef USE_ILI9341_DRIVER
+#include "ILI9341.hpp"
+#include "hardware/clocks.h"
+#define DISPLAY_DRIVER_CLASS ILI9341
+#else
 #include "drivers/st7789/st7789.hpp"
+#define DISPLAY_DRIVER_CLASS ST7789
+#endif
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "drivers/button/button.hpp"
 
@@ -100,7 +108,7 @@ constexpr std::string_view char_stop{"("};
 
 using namespace pimoroni;
 
-ST7789 st7789(320, 240, ROTATE_0, false, get_spi_pins(BG_SPI_FRONT));
+DISPLAY_DRIVER_CLASS st7789(320, 240, ROTATE_0, false, get_spi_pins(BG_SPI_FRONT));
 PicoGraphics_PenP4 graphics(st7789.width, st7789.height, nullptr);
 
 uint32_t inline str_x(uint32_t l) { return (st7789.width - l*8*font_scale)/2; }
@@ -115,67 +123,27 @@ Button button_a(0), button_b(1), button_x(2), button_y(3);
 Button button_a(PicoDisplay2::A), button_b(PicoDisplay2::B), button_x(PicoDisplay2::X), button_y(PicoDisplay2::Y);
 #endif
 
-#ifdef ZAXON_DEVICE
-
 const Pen
-	BG=graphics.create_pen(0xFF, 0xFF, 0xFF), WHITE=graphics.create_pen(0x5B, 0x5B, 0x5B),
-	GREEN=graphics.create_pen(0xFF, 0xFF, 0xFF), RED=graphics.create_pen(0xFF, 0xFF, 0xFF);
+	BG=graphics.create_pen(INITIAL_COLORS_BG),
+	WHITE=graphics.create_pen(INITIAL_COLORS_WHITE),
+	GREEN=graphics.create_pen(0x00, 0x00, 0x00),
+	RED=graphics.create_pen(0x00, 0x00, 0x00);
 
 void update_colors() {
 	if(current_options[clock_option_index]) {
 		// NTSC
-		// Atari $94
-		graphics.update_pen(BG, 0xFF, 0xBD, 0x4F);
-		// Atari $9A
-		graphics.update_pen(WHITE, 0xA2, 0x53, 0x00);
-		// Atari $C8
-		graphics.update_pen(GREEN, 0xD7, 0x4A, 0xDF);
-		// Atari $34
-		graphics.update_pen(RED, 0x6C, 0xEC, 0xFD);
+		graphics.update_pen(BG, MENU_COLORS_NTSC_BG);
+		graphics.update_pen(WHITE, MENU_COLORS_NTSC_WHITE);
+		graphics.update_pen(GREEN, MENU_COLORS_NTSC_GREEN);
+		graphics.update_pen(RED, MENU_COLORS_NTSC_RED);
 	}else{
 		// PAL
-		// Atari $94
-		graphics.update_pen(BG, 0xFF, 0x99, 0x89);
-		// Atari $9A
-		graphics.update_pen(WHITE, 0xA7, 0x37, 0x27);
-		// Atari $C8
-		graphics.update_pen(GREEN, 0x9C, 0x50, 0xFF);
-		// Atari $24
-		graphics.update_pen(RED, 0x69, 0xD8, 0xE9);
+		graphics.update_pen(BG, MENU_COLORS_PAL_BG);
+		graphics.update_pen(WHITE, MENU_COLORS_PAL_WHITE);
+		graphics.update_pen(GREEN, MENU_COLORS_PAL_GREEN);
+		graphics.update_pen(RED, MENU_COLORS_PAL_RED);
 	}
 }
-
-#else
-
-const Pen
-	BG=graphics.create_pen(0x00, 0x00, 0x00), WHITE=graphics.create_pen(0xA4, 0xA4, 0xA4),
-	GREEN=graphics.create_pen(0x00, 0x00, 0x00), RED=graphics.create_pen(0x00, 0x00, 0x00);
-
-void update_colors() {
-	if(current_options[clock_option_index]) {
-		// NTSC
-		// Atari $94
-		graphics.update_pen(BG, 0x00, 0x42, 0xB0);
-		// Atari $9A
-		graphics.update_pen(WHITE, 0x5D, 0xAC, 0xFF);
-		// Atari $C8
-		graphics.update_pen(GREEN, 0x28, 0xB5, 0x20);
-		// Atari $34
-		graphics.update_pen(RED, 0x93, 0x13, 0x02);
-	}else{
-		// PAL
-		// Atari $94
-		graphics.update_pen(BG, 0x00, 0x66, 0x76);
-		// Atari $9A
-		graphics.update_pen(WHITE, 0x58, 0xC8, 0xD8);
-		// Atari $C8
-		graphics.update_pen(GREEN, 0x63, 0xAF, 0x00);
-		// Atari $24
-		graphics.update_pen(RED, 0x96, 0x27, 0x16);
-	}
-}
-
-#endif
 
 void print_text(const std::string_view &t, int inverse=0) {
 	graphics.set_pen(WHITE);
