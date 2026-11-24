@@ -19,11 +19,17 @@
 
 #include "led_indicator.hpp"
 
+#ifdef USE_RGB_LED_WITH_COMMON_CATHODE
+#define led_polarity pimoroni::Polarity::ACTIVE_HIGH
+#else
+#define led_polarity pimoroni::Polarity::ACTIVE_LOW
+#endif
+
 volatile int8_t red_blinks = 0;
 volatile int8_t green_blinks = 0;
 volatile int8_t blue_blinks = 0;
 
-pimoroni::RGBLED led(pimoroni::PicoDisplay2::LED_R, pimoroni::PicoDisplay2::LED_G, pimoroni::PicoDisplay2::LED_B, pimoroni::Polarity::ACTIVE_LOW, 64);
+pimoroni::RGBLED led(pimoroni::PicoDisplay2::LED_R, pimoroni::PicoDisplay2::LED_G, pimoroni::PicoDisplay2::LED_B, led_polarity, 64);
 
 void update_rgb_led(bool from_interrupt) {
 	uint32_t ints;

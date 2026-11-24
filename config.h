@@ -44,6 +44,21 @@
 #define MOTOR_OFF_DELAY 0 // 500 ms
 #define MOTOR_ON_DELAY 0 // 500 ms
 
+// This switches from default Pimoroni ST7789 driver to custom ILI9341 driver
+// to support e.g. TZT 240x320 2.8" SPI TFT LCD with ILI9341 chip
+
+//#define USE_ILI9341_DRIVER
+
+// This switches polarity of LED indicator (RGB LEDs with CC are easier to
+// find in stores)
+
+//#define USE_RGB_LED_WITH_COMMON_CATHODE
+
+// This increases contrast of PAL menu while still keeping it Atarish (useful for
+// basic TN screens, where PAL menu contrast may be uncomfortably low)
+
+//#define INCREASE_MENU_CONTRAST
+
 // This changes colors for the device with at TFT screen that Zaxon of
 // atarionline.pl has built.
 

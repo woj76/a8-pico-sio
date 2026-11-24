@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.13)
 
+# Register custom board directory alongside built-in SDK/Pimoroni boards
+list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/custom_pico_boards)
+
 if(NOT PICO_BOARD)
     set(PICO_BOARD pico)
 endif()
@@ -45,6 +48,7 @@ target_sources(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/sd_driver/sd_card.c
     ${CMAKE_CURRENT_LIST_DIR}/sd_driver/sd_spi.c
     ${CMAKE_CURRENT_LIST_DIR}/sd_driver/spi.c
+    ${CMAKE_CURRENT_LIST_DIR}/ili9341_driver/ILI9341.cpp
     # ffsystem.c is not used
 )
 
@@ -55,6 +59,7 @@ target_include_directories(a8_pico_sio PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/fatfs
     ${CMAKE_CURRENT_LIST_DIR}/sd_driver
+    ${CMAKE_CURRENT_LIST_DIR}/ili9341_driver
 )
 
 target_link_libraries(a8_pico_sio PUBLIC pico_stdlib pico_rand pico_multicore hardware_pio hardware_uart hardware_flash tinyusb_device hardware_dma hardware_irq hardware_spi hardware_pwm hardware_dma rgbled button pico_graphics pico_display_2 st7789)
